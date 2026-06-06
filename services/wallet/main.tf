@@ -4,7 +4,8 @@ locals {
     app     = var.service
     project = var.project
   }
-  custom_domain_enabled = var.custom_domain_name != null && var.route53_zone_name != null
+  custom_domain_enabled  = var.custom_domain_name != null && var.route53_zone_name != null
+  jwt_authorizer_enabled = var.jwt_issuer != null && length(var.jwt_audience) > 0
 
   common_tags = merge(
     {
@@ -115,11 +116,12 @@ resource "kubernetes_service_v1" "this" {
     labels    = local.app_labels
     annotations = merge(
       {
-        "service.beta.kubernetes.io/aws-load-balancer-type"     = "nlb"
-        "service.beta.kubernetes.io/aws-load-balancer-scheme"   = "internal"
-        "service.beta.kubernetes.io/aws-load-balancer-internal" = "true"
-        "service.beta.kubernetes.io/aws-load-balancer-name"     = var.load_balancer_name
-        "service.beta.kubernetes.io/aws-load-balancer-subnets"  = join(",", data.terraform_remote_state.platform.outputs.private_subnet_ids)
+        "service.beta.kubernetes.io/aws-load-balancer-type"            = "nlb"
+        "service.beta.kubernetes.io/aws-load-balancer-scheme"          = "internal"
+        "service.beta.kubernetes.io/aws-load-balancer-internal"        = "true"
+        "service.beta.kubernetes.io/aws-load-balancer-name"            = var.load_balancer_name
+        "service.beta.kubernetes.io/aws-load-balancer-subnets"         = join(",", data.terraform_remote_state.platform.outputs.private_subnet_ids)
+        "service.beta.kubernetes.io/aws-load-balancer-nlb-target-type" = var.load_balancer_target_type
       },
       var.service_annotations
     )
@@ -167,7 +169,26 @@ resource "aws_apigatewayv2_stage" "default" {
   name        = "$default"
   auto_deploy = true
 
+  default_route_settings {
+    throttling_burst_limit = var.api_throttling_burst_limit
+    throttling_rate_limit  = var.api_throttling_rate_limit
+  }
+
   tags = local.common_tags
+}
+
+resource "aws_apigatewayv2_authorizer" "jwt" {
+  count = local.jwt_authorizer_enabled ? 1 : 0
+
+  api_id           = aws_apigatewayv2_api.this.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "${local.name_prefix}-${var.service}-jwt"
+
+  jwt_configuration {
+    audience = var.jwt_audience
+    issuer   = var.jwt_issuer
+  }
 }
 
 data "aws_route53_zone" "custom_domain" {
@@ -261,7 +282,9 @@ resource "aws_apigatewayv2_integration" "this" {
 }
 
 resource "aws_apigatewayv2_route" "this" {
-  api_id    = aws_apigatewayv2_api.this.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.this.id}"
+  api_id             = aws_apigatewayv2_api.this.id
+  authorization_type = local.jwt_authorizer_enabled ? "JWT" : "NONE"
+  authorizer_id      = local.jwt_authorizer_enabled ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  route_key          = "$default"
+  target             = "integrations/${aws_apigatewayv2_integration.this.id}"
 }

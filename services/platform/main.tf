@@ -160,8 +160,9 @@ resource "aws_eks_cluster" "this" {
 
   vpc_config {
     subnet_ids              = concat(aws_subnet.public[*].id, aws_subnet.private[*].id)
-    endpoint_private_access = false
-    endpoint_public_access  = true
+    endpoint_private_access = var.cluster_endpoint_private_access
+    endpoint_public_access  = var.cluster_endpoint_public_access
+    public_access_cidrs     = var.cluster_endpoint_public_access_cidrs
   }
 
   tags = local.common_tags

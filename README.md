@@ -2,6 +2,8 @@
 
 Woori Wallet 인프라를 관리하는 Terraform 저장소입니다.
 
+운영 인수인계와 비용 절감용 전체 종료/재기동 절차는 [docs/operations-handoff.md](docs/operations-handoff.md)를 참고합니다.
+
 ## 요구사항
 
 - Terraform 1.15.5
@@ -92,6 +94,27 @@ route53_zone_name  = "example.com"
 
 이 설정을 넣으면 ACM DNS 검증, API Gateway custom domain, Route53 alias record를 서비스 스택에서 함께 관리합니다.
 
+기본 배포는 비용을 낮추기 위해 node 1대, replica 1개, NAT Gateway 1개를 유지합니다. 운영 안정성이 더 필요해지면 `node_min_size`, `node_desired_size`, 서비스별 `replicas`를 2 이상으로 늘리고 NAT Gateway도 AZ별 구성으로 바꿉니다.
+
+보안 관련 기본 옵션:
+
+```hcl
+# services/platform/terraform.tfvars
+cluster_endpoint_private_access      = true
+cluster_endpoint_public_access       = true
+cluster_endpoint_public_access_cidrs = ["203.0.113.10/32"]
+
+# services/wallet 또는 services/woori terraform.tfvars
+api_throttling_burst_limit = 100
+api_throttling_rate_limit  = 50
+
+# JWT issuer/audience를 넣으면 API Gateway JWT authorizer가 켜집니다.
+# jwt_issuer   = "https://issuer.example.com"
+# jwt_audience = ["wallet-api"]
+```
+
+NLB를 pod IP로 직접 붙이는 `load_balancer_target_type = "ip"`는 AWS Load Balancer Controller 설정이 준비된 뒤에 켜는 것을 권장합니다. 기본값은 현재 Kubernetes Service controller와 호환되는 `instance`입니다.
+
 ## 시작하기
 
 먼저 Terraform state를 저장할 S3 bucket을 만듭니다.
@@ -131,6 +154,12 @@ make apply SERVICE_MODE=wallet
 
 ```sh
 make fmt
+```
+
+비용 절감을 위해 전체 인프라를 내릴 때는 서비스 스택을 먼저 내리고 마지막에 platform을 내리는 순서가 중요합니다.
+
+```sh
+make destroy-all
 ```
 
 서비스별 값을 바꾸려면 예시 파일을 복사해서 로컬 `terraform.tfvars`를 만듭니다.

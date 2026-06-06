@@ -64,6 +64,17 @@ variable "load_balancer_name" {
   default     = "wallet-api-prd"
 }
 
+variable "load_balancer_target_type" {
+  description = "NLB target type for the Kubernetes LoadBalancer. Use ip only after installing/configuring AWS Load Balancer Controller support."
+  type        = string
+  default     = "instance"
+
+  validation {
+    condition     = contains(["instance", "ip"], var.load_balancer_target_type)
+    error_message = "load_balancer_target_type must be either instance or ip."
+  }
+}
+
 variable "custom_domain_name" {
   description = "Optional custom domain name for this service API Gateway, for example wallet-api.example.com."
   type        = string
@@ -98,6 +109,30 @@ variable "service_port" {
   description = "Kubernetes Service port."
   type        = number
   default     = 80
+}
+
+variable "api_throttling_burst_limit" {
+  description = "Default API Gateway throttling burst limit for this service."
+  type        = number
+  default     = 100
+}
+
+variable "api_throttling_rate_limit" {
+  description = "Default API Gateway throttling steady-state request rate per second for this service."
+  type        = number
+  default     = 50
+}
+
+variable "jwt_issuer" {
+  description = "Optional JWT issuer URL for API Gateway authorization. Leave null to disable gateway-level JWT auth."
+  type        = string
+  default     = null
+}
+
+variable "jwt_audience" {
+  description = "Optional JWT audiences for API Gateway authorization. Set with jwt_issuer to enable gateway-level JWT auth."
+  type        = list(string)
+  default     = []
 }
 
 variable "replicas" {

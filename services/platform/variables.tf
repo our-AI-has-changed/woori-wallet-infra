@@ -34,6 +34,24 @@ variable "cluster_version" {
   default     = null
 }
 
+variable "cluster_endpoint_private_access" {
+  description = "Whether the EKS API server endpoint is reachable from inside the VPC."
+  type        = bool
+  default     = true
+}
+
+variable "cluster_endpoint_public_access" {
+  description = "Whether the EKS API server endpoint is reachable from the public internet."
+  type        = bool
+  default     = true
+}
+
+variable "cluster_endpoint_public_access_cidrs" {
+  description = "CIDR blocks allowed to access the public EKS API server endpoint. Restrict this to admin/VPN IPs for production."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
 variable "node_instance_types" {
   description = "EC2 instance types for the managed node group."
   type        = list(string)
