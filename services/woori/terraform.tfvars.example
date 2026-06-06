@@ -1,0 +1,7 @@
+aws_region  = "ap-northeast-2"
+project     = "woori-wallet"
+service     = "woori"
+environment = "prd"
+name_prefix = "woori-auth-prd"
+
+tags = {}
