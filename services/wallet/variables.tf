@@ -67,7 +67,7 @@ variable "image_tag" {
 variable "container_port" {
   description = "Container HTTP port."
   type        = number
-  default     = 8080
+  default     = 8000
 }
 
 variable "service_port" {
@@ -85,7 +85,7 @@ variable "replicas" {
 variable "health_check_path" {
   description = "HTTP health check path for readiness and liveness probes."
   type        = string
-  default     = "/health"
+  default     = "/docs"
 }
 
 variable "environment_variables" {
