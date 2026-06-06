@@ -8,8 +8,9 @@ state_bucket_name = "woori-wallet-tfstate-655700895912-apne2"
 
 namespace        = "wallet"
 app_name         = "wallet-api"
-route_path       = "wallet"
 load_balancer_name = "wallet-api-prd"
+# custom_domain_name = "wallet-api.example.com"
+# route53_zone_name  = "example.com"
 image_repository = "655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/woori-wallet-trial"
 image_tag        = "latest"
 container_port   = 8000

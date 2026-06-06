@@ -53,7 +53,7 @@ variable "app_name" {
 }
 
 variable "route_path" {
-  description = "API Gateway path prefix for the service."
+  description = "Deprecated. Services now use dedicated API Gateways with a root $default route."
   type        = string
   default     = "woori"
 }
@@ -62,6 +62,18 @@ variable "load_balancer_name" {
   description = "Internal NLB name created for the Kubernetes service."
   type        = string
   default     = "woori-api-prd"
+}
+
+variable "custom_domain_name" {
+  description = "Optional custom domain name for this service API Gateway, for example woori-api.example.com."
+  type        = string
+  default     = null
+}
+
+variable "route53_zone_name" {
+  description = "Optional public Route53 hosted zone name used to validate and point the custom domain, for example example.com."
+  type        = string
+  default     = null
 }
 
 variable "image_repository" {

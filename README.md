@@ -58,25 +58,39 @@ Woori Wallet 인프라를 관리하는 Terraform 저장소입니다.
 
 ## API 진입 구조
 
-모바일 앱은 public API Gateway로 접근하고, EKS 서비스는 internal NLB 뒤에 둡니다.
+모바일 앱은 서비스별 public API Gateway로 접근하고, EKS 서비스는 internal NLB 뒤에 둡니다.
 
 ```text
 Mobile App
-  -> API Gateway
+  -> Service API Gateway
   -> VPC Link
   -> Internal NLB
   -> EKS Service
   -> Pod
 ```
 
-라우팅:
+서비스별 진입점:
 
 ```text
-/woori/{proxy+}  -> woori-api
-/wallet/{proxy+} -> wallet-api
+wallet API Gateway -> wallet-api
+woori API Gateway  -> woori-api
 ```
 
-예를 들어 `/woori/docs` 요청은 backend pod의 `/docs`로 전달됩니다.
+각 Gateway는 `$default` route로 자기 backend에 연결됩니다. 예를 들어 wallet Gateway의 `/docs` 요청은 backend pod의 `/docs`로 그대로 전달되고, `/openapi.json`도 같은 Gateway 루트에서 처리됩니다.
+
+Route53 hosted zone이 있으면 서비스별 custom domain을 붙일 수 있습니다.
+
+```hcl
+# services/wallet/terraform.tfvars
+custom_domain_name = "wallet-api.example.com"
+route53_zone_name  = "example.com"
+
+# services/woori/terraform.tfvars
+custom_domain_name = "woori-api.example.com"
+route53_zone_name  = "example.com"
+```
+
+이 설정을 넣으면 ACM DNS 검증, API Gateway custom domain, Route53 alias record를 서비스 스택에서 함께 관리합니다.
 
 ## 시작하기
 
