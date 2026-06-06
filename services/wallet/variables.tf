@@ -33,3 +33,96 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "state_bucket_name" {
+  description = "S3 bucket name used for Terraform remote state."
+  type        = string
+  default     = "woori-wallet-tfstate-655700895912-apne2"
+}
+
+variable "namespace" {
+  description = "Kubernetes namespace for the service."
+  type        = string
+  default     = "wallet"
+}
+
+variable "app_name" {
+  description = "Kubernetes app name."
+  type        = string
+  default     = "wallet-api"
+}
+
+variable "image_repository" {
+  description = "ECR image repository URI."
+  type        = string
+  default     = "655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/woori-wallet-trial"
+}
+
+variable "image_tag" {
+  description = "Container image tag."
+  type        = string
+  default     = "latest"
+}
+
+variable "container_port" {
+  description = "Container HTTP port."
+  type        = number
+  default     = 8080
+}
+
+variable "service_port" {
+  description = "Kubernetes Service port."
+  type        = number
+  default     = 80
+}
+
+variable "replicas" {
+  description = "Deployment replica count."
+  type        = number
+  default     = 2
+}
+
+variable "health_check_path" {
+  description = "HTTP health check path for readiness and liveness probes."
+  type        = string
+  default     = "/health"
+}
+
+variable "environment_variables" {
+  description = "Additional non-secret environment variables for the container."
+  type        = map(string)
+  default     = {}
+}
+
+variable "service_annotations" {
+  description = "Annotations for the Kubernetes LoadBalancer Service."
+  type        = map(string)
+  default = {
+    "service.beta.kubernetes.io/aws-load-balancer-type"   = "nlb"
+    "service.beta.kubernetes.io/aws-load-balancer-scheme" = "internet-facing"
+  }
+}
+
+variable "cpu_request" {
+  description = "Container CPU request."
+  type        = string
+  default     = "100m"
+}
+
+variable "memory_request" {
+  description = "Container memory request."
+  type        = string
+  default     = "128Mi"
+}
+
+variable "cpu_limit" {
+  description = "Container CPU limit."
+  type        = string
+  default     = "500m"
+}
+
+variable "memory_limit" {
+  description = "Container memory limit."
+  type        = string
+  default     = "512Mi"
+}

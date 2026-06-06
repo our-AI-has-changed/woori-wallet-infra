@@ -4,4 +4,14 @@ service     = "woori"
 environment = "prd"
 name_prefix = "woori-auth-prd"
 
+state_bucket_name = "woori-wallet-tfstate-655700895912-apne2"
+
+namespace        = "woori"
+app_name         = "woori-api"
+image_repository = "655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/woori-wallet-trial"
+image_tag        = "latest"
+container_port   = 8080
+service_port     = 80
+replicas         = 2
+
 tags = {}

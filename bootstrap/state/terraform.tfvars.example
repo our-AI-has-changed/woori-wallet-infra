@@ -1,0 +1,7 @@
+aws_region        = "ap-northeast-2"
+project           = "woori-wallet"
+environment       = "prd"
+state_bucket_name = "woori-wallet-tfstate-655700895912-apne2"
+
+tags = {}
+

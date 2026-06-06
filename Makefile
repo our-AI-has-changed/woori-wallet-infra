@@ -1,10 +1,11 @@
 SERVICE_MODE ?= woori
-TF_DIR := services/$(SERVICE_MODE)
+STACK_MODE ?= $(SERVICE_MODE)
+TF_DIR := $(if $(filter state,$(STACK_MODE)),bootstrap/state,services/$(STACK_MODE))
 
-.PHONY: init fmt validate plan
+.PHONY: init fmt validate plan apply output
 
 init:
-	terraform -chdir=$(TF_DIR) init
+	terraform -chdir=$(TF_DIR) init -reconfigure
 
 fmt:
 	terraform fmt -recursive
@@ -14,3 +15,9 @@ validate:
 
 plan:
 	terraform -chdir=$(TF_DIR) plan
+
+apply:
+	terraform -chdir=$(TF_DIR) apply
+
+output:
+	terraform -chdir=$(TF_DIR) output
