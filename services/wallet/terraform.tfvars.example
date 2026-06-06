@@ -12,6 +12,6 @@ image_repository = "655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has
 image_tag        = "latest"
 container_port   = 8080
 service_port     = 80
-replicas         = 2
+replicas         = 1
 
 tags = {}

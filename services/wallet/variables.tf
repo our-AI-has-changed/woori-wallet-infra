@@ -79,7 +79,7 @@ variable "service_port" {
 variable "replicas" {
   description = "Deployment replica count."
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "health_check_path" {
