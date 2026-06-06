@@ -37,7 +37,7 @@ variable "cluster_version" {
 variable "node_instance_types" {
   description = "EC2 instance types for the managed node group."
   type        = list(string)
-  default     = ["t3.medium"]
+  default     = ["t3.small"]
 }
 
 variable "node_disk_size" {
@@ -55,13 +55,13 @@ variable "node_min_size" {
 variable "node_desired_size" {
   description = "Desired node count."
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "node_max_size" {
   description = "Maximum node count."
   type        = number
-  default     = 3
+  default     = 1
 }
 
 variable "tags" {

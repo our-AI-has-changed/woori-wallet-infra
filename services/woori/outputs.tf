@@ -22,3 +22,8 @@ output "load_balancer_hostname" {
   description = "Load balancer hostname for the woori service."
   value       = try(kubernetes_service_v1.this.status[0].load_balancer[0].ingress[0].hostname, null)
 }
+
+output "api_route" {
+  description = "API Gateway route path for the woori service."
+  value       = "/${var.route_path}/{proxy+}"
+}

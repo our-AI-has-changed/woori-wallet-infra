@@ -56,6 +56,28 @@ Woori Wallet 인프라를 관리하는 Terraform 저장소입니다.
 - `SERVICE_MODE=woori`: 우리 인증/사용자 서비스
 - `SERVICE_MODE=wallet`: 지갑/소비재판 서비스
 
+## API 진입 구조
+
+모바일 앱은 public API Gateway로 접근하고, EKS 서비스는 internal NLB 뒤에 둡니다.
+
+```text
+Mobile App
+  -> API Gateway
+  -> VPC Link
+  -> Internal NLB
+  -> EKS Service
+  -> Pod
+```
+
+라우팅:
+
+```text
+/woori/{proxy+}  -> woori-api
+/wallet/{proxy+} -> wallet-api
+```
+
+예를 들어 `/woori/docs` 요청은 backend pod의 `/docs`로 전달됩니다.
+
 ## 시작하기
 
 먼저 Terraform state를 저장할 S3 bucket을 만듭니다.

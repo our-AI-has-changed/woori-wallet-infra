@@ -52,6 +52,18 @@ variable "app_name" {
   default     = "wallet-api"
 }
 
+variable "route_path" {
+  description = "API Gateway path prefix for the service."
+  type        = string
+  default     = "wallet"
+}
+
+variable "load_balancer_name" {
+  description = "Internal NLB name created for the Kubernetes service."
+  type        = string
+  default     = "wallet-api-prd"
+}
+
 variable "image_repository" {
   description = "ECR image repository URI."
   type        = string
@@ -95,12 +107,9 @@ variable "environment_variables" {
 }
 
 variable "service_annotations" {
-  description = "Annotations for the Kubernetes LoadBalancer Service."
+  description = "Additional annotations for the Kubernetes LoadBalancer Service."
   type        = map(string)
-  default = {
-    "service.beta.kubernetes.io/aws-load-balancer-type"   = "nlb"
-    "service.beta.kubernetes.io/aws-load-balancer-scheme" = "internet-facing"
-  }
+  default     = {}
 }
 
 variable "cpu_request" {

@@ -109,10 +109,17 @@ resource "kubernetes_deployment_v1" "this" {
 
 resource "kubernetes_service_v1" "this" {
   metadata {
-    name        = var.app_name
-    namespace   = kubernetes_namespace_v1.this.metadata[0].name
-    labels      = local.app_labels
-    annotations = var.service_annotations
+    name      = var.app_name
+    namespace = kubernetes_namespace_v1.this.metadata[0].name
+    labels    = local.app_labels
+    annotations = merge(
+      {
+        "service.beta.kubernetes.io/aws-load-balancer-type"   = "nlb"
+        "service.beta.kubernetes.io/aws-load-balancer-scheme" = "internal"
+        "service.beta.kubernetes.io/aws-load-balancer-name"   = var.load_balancer_name
+      },
+      var.service_annotations
+    )
   }
 
   spec {
@@ -126,4 +133,35 @@ resource "kubernetes_service_v1" "this" {
       protocol    = "TCP"
     }
   }
+}
+
+data "aws_lb" "this" {
+  name = var.load_balancer_name
+
+  depends_on = [kubernetes_service_v1.this]
+}
+
+data "aws_lb_listener" "http" {
+  load_balancer_arn = data.aws_lb.this.arn
+  port              = var.service_port
+}
+
+resource "aws_apigatewayv2_integration" "this" {
+  api_id                 = data.terraform_remote_state.platform.outputs.api_gateway_id
+  integration_type       = "HTTP_PROXY"
+  integration_method     = "ANY"
+  integration_uri        = data.aws_lb_listener.http.arn
+  connection_type        = "VPC_LINK"
+  connection_id          = data.terraform_remote_state.platform.outputs.api_gateway_vpc_link_id
+  payload_format_version = "1.0"
+
+  request_parameters = {
+    "overwrite:path" = "/$request.path.proxy"
+  }
+}
+
+resource "aws_apigatewayv2_route" "this" {
+  api_id    = data.terraform_remote_state.platform.outputs.api_gateway_id
+  route_key = "ANY /${var.route_path}/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.this.id}"
 }

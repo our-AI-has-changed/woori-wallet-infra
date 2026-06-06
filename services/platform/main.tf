@@ -232,3 +232,42 @@ resource "aws_eks_node_group" "this" {
   ]
 }
 
+resource "aws_security_group" "api_gateway_vpc_link" {
+  name        = "${local.name_prefix}-apigw-vpc-link-sg"
+  description = "Security group for API Gateway VPC Link ENIs."
+  vpc_id      = aws_vpc.this.id
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${local.name_prefix}-apigw-vpc-link-sg"
+  })
+}
+
+resource "aws_apigatewayv2_api" "this" {
+  name          = "${local.name_prefix}-api"
+  protocol_type = "HTTP"
+
+  tags = local.common_tags
+}
+
+resource "aws_apigatewayv2_vpc_link" "this" {
+  name               = "${local.name_prefix}-vpc-link"
+  security_group_ids = [aws_security_group.api_gateway_vpc_link.id]
+  subnet_ids         = aws_subnet.private[*].id
+
+  tags = local.common_tags
+}
+
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.this.id
+  name        = "$default"
+  auto_deploy = true
+
+  tags = local.common_tags
+}
