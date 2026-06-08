@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wallet-woori-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/name: wallet-woori-overview-dashboard
+    app.kubernetes.io/part-of: woori-wallet
+  annotations:
+    grafana_folder: Woori Wallet
+data:
+  wallet-woori-overview.json: |-
+    {
+      "uid": "woori-wallet-overview",
+      "title": "Woori Wallet Overview",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "tags": ["woori-wallet", "kubernetes"],
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "wallet-backend Pod Up/Down",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "sum(kube_pod_status_phase{namespace=\"wallet\", pod=~\"wallet-backend-.*\", phase=\"Running\"} == 1)",
+              "legendFormat": "wallet-backend"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "woori-backend Pod Up/Down",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+          "targets": [
+            {
+              "expr": "sum(kube_pod_status_phase{namespace=\"woori\", pod=~\"woori-backend-.*\", phase=\"Running\"} == 1)",
+              "legendFormat": "woori-backend"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Node Ready",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "sum(kube_node_status_condition{condition=\"Ready\", status=\"true\"} == 1)",
+              "legendFormat": "ready nodes"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Deployment Available Replicas",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "targets": [
+            {
+              "expr": "kube_deployment_status_replicas_available{namespace=~\"wallet|woori\"}",
+              "legendFormat": "{{namespace}}/{{deployment}} available"
+            },
+            {
+              "expr": "kube_deployment_spec_replicas{namespace=~\"wallet|woori\"}",
+              "legendFormat": "{{namespace}}/{{deployment}} desired"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Namespace CPU Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"wallet|woori\", container!=\"\", pod!=\"\"}[5m])) by (namespace)",
+              "legendFormat": "{{namespace}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "cores"
+            }
+          }
+        },
+        {
+          "id": 6,
+          "title": "Namespace Memory Usage",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"wallet|woori\", container!=\"\", pod!=\"\"}) by (namespace)",
+              "legendFormat": "{{namespace}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            }
+          }
+        },
+        {
+          "id": 7,
+          "title": "Pod Restart Count",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+          "targets": [
+            {
+              "expr": "sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace=~\"wallet|woori\"}[10m]))",
+              "legendFormat": "{{namespace}}/{{pod}}"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "title": "Pod Status by Phase",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+          "targets": [
+            {
+              "expr": "sum by (namespace, phase) (kube_pod_status_phase{namespace=~\"wallet|woori\", phase=~\"Running|Pending|Failed\"} == 1)",
+              "legendFormat": "{{namespace}} {{phase}}"
+            }
+          ]
+        }
+      ]
+    }

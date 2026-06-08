@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-mydata
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: mock-mydata
+    app.kubernetes.io/part-of: woori-wallet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mock-mydata
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mock-mydata
+        app.kubernetes.io/part-of: woori-wallet
+    spec:
+      containers:
+        - name: mock-mydata
+          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/mock-mydata:sha-2dc3a91
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8003
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi

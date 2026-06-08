@@ -1,0 +1,73 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: woori-wallet-alerts
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: woori-wallet-alerts
+    app.kubernetes.io/part-of: woori-wallet
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: woori-wallet.kubernetes
+      rules:
+        - alert: WalletBackendPodMissing
+          expr: absent(kube_pod_status_phase{namespace="wallet", pod=~"wallet-backend-.*", phase="Running"} == 1)
+          for: 2m
+          labels:
+            severity: critical
+            service: wallet-backend
+          annotations:
+            summary: wallet-backend pod is not running
+            description: No running wallet-backend pod has been observed for more than 2 minutes.
+
+        - alert: WooriBackendPodMissing
+          expr: absent(kube_pod_status_phase{namespace="woori", pod=~"woori-backend-.*", phase="Running"} == 1)
+          for: 2m
+          labels:
+            severity: critical
+            service: woori-backend
+          annotations:
+            summary: woori-backend pod is not running
+            description: No running woori-backend pod has been observed for more than 2 minutes.
+
+        - alert: PodRestartIncreased
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"wallet|woori"}[10m]) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: Pod restart count increased
+            description: A pod container in wallet or woori restarted within the last 10 minutes.
+
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready", status="true"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: EKS node is NotReady
+            description: A Kubernetes node has been NotReady for more than 5 minutes.
+
+        - alert: DeploymentAvailableReplicasLow
+          expr: kube_deployment_status_replicas_available{namespace=~"wallet|woori"} < kube_deployment_spec_replicas{namespace=~"wallet|woori"}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Deployment available replicas are below desired replicas
+            description: A wallet or woori deployment has fewer available replicas than desired.
+
+        - alert: NamespaceMemoryUsageHigh
+          expr: |
+            (
+              sum(container_memory_working_set_bytes{namespace=~"wallet|woori", container!="", pod!=""}) by (namespace)
+              /
+              sum(kube_pod_container_resource_limits{namespace=~"wallet|woori", resource="memory"}) by (namespace)
+            ) > 0.85
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Namespace memory usage is high
+            description: A wallet or woori namespace has used more than 85 percent of declared memory limits for 15 minutes.

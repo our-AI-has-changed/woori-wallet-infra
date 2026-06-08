@@ -1,0 +1,23 @@
+aws_region        = "ap-northeast-2"
+project           = "woori-wallet"
+environment       = "prd"
+name_prefix       = "woori-wallet-prd"
+vpc_cidr          = "10.20.0.0/16"
+cluster_version   = "1.33"
+cluster_endpoint_private_access      = true
+cluster_endpoint_public_access       = true
+cluster_endpoint_public_access_cidrs = ["0.0.0.0/0"]
+node_min_size     = 2
+node_desired_size = 2
+node_max_size     = 2
+
+node_instance_types = ["t3.small"]
+
+enable_ebs_csi_driver       = true
+ebs_csi_driver_addon_version = "v1.61.1-eksbuild.1"
+
+shared_alb_name          = "woori-wallet-prd-api-alb"
+shared_alb_node_port_min = 30080
+shared_alb_node_port_max = 30089
+
+tags = {}

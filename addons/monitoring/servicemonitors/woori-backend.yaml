@@ -1,0 +1,25 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: woori-backend
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: woori-backend
+    app.kubernetes.io/part-of: woori-wallet
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - woori
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: woori-backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      authorization:
+        type: Bearer
+        credentials:
+          name: metrics-token
+          key: METRICS_TOKEN

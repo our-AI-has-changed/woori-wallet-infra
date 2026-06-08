@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wallet-backend
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: wallet-backend
+    app.kubernetes.io/part-of: woori-wallet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wallet-backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wallet-backend
+        app.kubernetes.io/part-of: woori-wallet
+    spec:
+      containers:
+        - name: wallet-backend
+          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/wallet-backend:sha-2dc3a91
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: CORS_ORIGINS
+              value: "*"
+            - name: WOORI_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: woori-db-credentials
+                  key: WOORI_DATABASE_URL
+            - name: WALLET_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: wallet-db-credentials
+                  key: WALLET_DATABASE_URL
+            - name: WALLET_AI_URL
+              value: http://wallet-ai:8002
+            - name: MYDATA_API_URL
+              value: http://mock-mydata:8003
+            - name: METRICS_ENABLED
+              value: "true"
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: metrics-token
+                  key: METRICS_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

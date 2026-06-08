@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-mydata
+  namespace: wallet
+  labels:
+    app.kubernetes.io/name: mock-mydata
+    app.kubernetes.io/part-of: woori-wallet
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mock-mydata
+  ports:
+    - name: http
+      port: 8003
+      targetPort: http

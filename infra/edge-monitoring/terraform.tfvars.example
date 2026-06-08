@@ -1,0 +1,28 @@
+aws_region  = "ap-northeast-2"
+project     = "woori-wallet"
+service     = "monitoring"
+environment = "prd"
+name_prefix = "woori-wallet-prd"
+
+state_bucket_name = "woori-wallet-tfstate-655700895912-apne2"
+
+node_port                  = 30082
+target_group_name          = "grafana-prd-tg"
+alb_host_header            = "grafana.internal"
+alb_listener_rule_priority = 120
+blocked_paths              = []
+health_check_path          = "/api/health"
+health_check_matcher       = "200-399"
+
+api_throttling_burst_limit = 20
+api_throttling_rate_limit  = 5
+
+# Documentation-only default. Replace with your current admin/VPN public IP CIDR before use.
+admin_allowed_cidrs = ["203.0.113.10/32"]
+
+# custom_domain_name = "grafana.example.com"
+# route53_zone_name  = "example.com"
+# jwt_issuer   = "https://issuer.example.com"
+# jwt_audience = ["grafana"]
+
+tags = {}

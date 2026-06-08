@@ -1,0 +1,9 @@
+resources:
+  - storage
+  - namespaces
+  - woori-db
+  - wallet-db
+  - woori-backend
+  - wallet-backend
+  - wallet-ai
+  - mock-mydata

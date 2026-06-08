@@ -1,123 +1,251 @@
 # woori-wallet-infra
 
-Woori Wallet 인프라를 관리하는 Terraform 저장소입니다.
+Woori Wallet AWS/EKS 인프라와 GitOps 배포 기준을 관리하는 저장소입니다.
 
-운영 인수인계와 비용 절감용 전체 종료/재기동 절차는 [docs/operations-handoff.md](docs/operations-handoff.md)를 참고합니다.
+운영자가 실제로 인프라를 올리고, 확인하고, 비용 절감을 위해 내리는 절차는 [docs/operations-handoff.md](docs/operations-handoff.md)를 기준으로 봅니다. 이 README는 전체 구조를 빠르게 파악하기 위한 요약입니다.
+
+## 한 줄 요약
+
+```text
+Terraform
+  -> VPC/EKS/shared internal ALB/API Gateway edge 생성
+Argo CD
+  -> apps/, addons/monitoring/ GitOps sync
+GitHub Actions
+  -> 앱 image를 ECR에 push하고 infra repo image tag commit
+EKS
+  -> backend, ai, mock-mydata, MySQL pod, Prometheus, Grafana 실행
+```
 
 ## 요구사항
 
 - Terraform 1.15.5
-- 로컬 AWS credential 설정
+- AWS CLI credential
+- kubectl
+- Helm
+- openssl
+- Python 3
 
-## 구조
+## 디렉터리 구조
 
 ```text
 .
 ├── Makefile
-├── bootstrap
-│   └── state
-│       ├── main.tf
-│       ├── outputs.tf
-│       ├── providers.tf
-│       ├── terraform.tfvars.example
-│       ├── variables.tf
-│       └── versions.tf
-├── modules
-│   └── README.md
-├── services
-│   ├── platform
-│   │   ├── backend.tf
-│   │   ├── main.tf
-│   │   ├── outputs.tf
-│   │   ├── providers.tf
-│   │   ├── terraform.tfvars.example
-│   │   ├── variables.tf
-│   │   └── versions.tf
-│   ├── wallet
-│   │   ├── backend.tf
-│   │   ├── main.tf
-│   │   ├── outputs.tf
-│   │   ├── providers.tf
-│   │   ├── terraform.tfvars.example
-│   │   ├── variables.tf
-│   │   └── versions.tf
-│   └── woori
-│       ├── backend.tf
-│       ├── main.tf
-│       ├── outputs.tf
-│       ├── providers.tf
-│       ├── terraform.tfvars.example
-│       ├── variables.tf
-│       └── versions.tf
+├── bootstrap/state              # Terraform remote state S3 bucket bootstrap
+├── infra
+│   ├── platform                 # VPC, EKS, node group, EBS CSI, shared internal ALB, VPC Link
+│   ├── edge-woori               # woori API Gateway, ALB rule, target group
+│   ├── edge-wallet              # wallet API Gateway, ALB rule, target group
+│   └── edge-monitoring          # Grafana API Gateway, WAF allowlist, ALB rule, target group
+├── modules/service-edge          # 서비스별 public edge 공통 Terraform 모듈
+├── apps                          # Argo CD가 sync하는 앱/DB Kubernetes manifest
+├── addons
+│   ├── argocd                   # Argo CD Helm values
+│   └── monitoring               # kube-prometheus-stack values, dashboards, alerts, ServiceMonitor
+├── argocd/applications           # Argo CD Application manifest
+└── docs/operations-handoff.md    # 운영 인수인계서
 ```
 
-## 서비스
+## Terraform 책임 분리
 
-- `STACK_MODE=state`: Terraform state S3 bucket bootstrap
-- `SERVICE_MODE=platform`: 공통 VPC/EKS 플랫폼
-- `SERVICE_MODE=woori`: 우리 인증/사용자 서비스
-- `SERVICE_MODE=wallet`: 지갑/소비재판 서비스
+| 스택 | 책임 |
+| --- | --- |
+| `STACK_MODE=state` | Terraform state용 S3 bucket bootstrap |
+| `SERVICE_MODE=platform` | VPC, public/private subnet, NAT Gateway 1개, EKS, node group, EBS CSI, shared internal ALB, API Gateway VPC Link |
+| `SERVICE_MODE=edge-woori` | woori-backend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
+| `SERVICE_MODE=edge-wallet` | wallet-backend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
+| `SERVICE_MODE=edge-monitoring` | Grafana public API Gateway, WAF IP allowlist, ALB listener rule, target group, optional custom domain |
 
-## API 진입 구조
+호환성을 위해 `SERVICE_MODE=woori`, `SERVICE_MODE=wallet`도 각각 `edge-woori`, `edge-wallet`로 매핑됩니다.
 
-모바일 앱은 서비스별 public API Gateway로 접근하고, EKS 서비스는 internal NLB 뒤에 둡니다.
+## 현재 아키텍처
+
+서비스별 NLB 2개 방식이 아니라, `platform`이 만드는 shared internal ALB 1개를 함께 사용합니다.
 
 ```text
-Mobile App
-  -> Service API Gateway
-  -> VPC Link
-  -> Internal NLB
-  -> EKS Service
+Mobile / Client
+  -> service-specific HTTP API Gateway
+  -> API Gateway VPC Link
+  -> shared internal ALB
+  -> Host header based listener rule
+  -> service target group
+  -> EKS node NodePort
+  -> Kubernetes Service
   -> Pod
 ```
 
-서비스별 진입점:
+서비스별 포트와 라우팅 기준:
+
+| 서비스 | 외부 진입 | 내부 Host header | Kubernetes Service | NodePort |
+| --- | --- | --- | --- | --- |
+| wallet-backend | `edge-wallet` HTTP API Gateway | `wallet.internal` | `wallet/wallet-backend` | `30080` |
+| woori-backend | `edge-woori` HTTP API Gateway | `woori.internal` | `woori/woori-backend` | `30081` |
+| Grafana | `edge-monitoring` HTTP API Gateway | `grafana.internal` | `monitoring/kube-prometheus-stack-grafana` | `30082` |
+
+API Gateway는 `$default` route로 들어온 요청을 shared ALB로 넘기고, integration에서 내부 `Host` header를 서비스별 값으로 덮어씁니다. 그래서 `/docs`, `/openapi.json`, 일반 API path는 Gateway path rewrite 없이 backend로 그대로 전달됩니다.
+
+외부 `/metrics` path는 backend 서비스 edge에서 ALB fixed-response rule로 `403` 차단합니다. Prometheus는 외부 Gateway가 아니라 Kubernetes 내부 ServiceMonitor로 `/metrics`를 scrape합니다.
+
+## EKS와 앱
+
+기본값은 비용과 최소 운영 여유를 같이 고려한 구성입니다.
 
 ```text
-wallet API Gateway -> wallet-api
-woori API Gateway  -> woori-api
+EKS node group: t3.small, min 2 / desired 2 / max 2
+NAT Gateway: 1개
+app replicas: 1
+DB: EKS 내부 MySQL StatefulSet 2개, 각 PVC 5Gi
 ```
 
-각 Gateway는 `$default` route로 자기 backend에 연결됩니다. 예를 들어 wallet Gateway의 `/docs` 요청은 backend pod의 `/docs`로 그대로 전달되고, `/openapi.json`도 같은 Gateway 루트에서 처리됩니다.
+앱 manifest는 `apps/` 아래에 있습니다.
 
-Route53 hosted zone이 있으면 서비스별 custom domain을 붙일 수 있습니다.
+| 경로 | namespace | 역할 |
+| --- | --- | --- |
+| `apps/woori-backend` | `woori` | 우리 인증/회원 backend |
+| `apps/wallet-backend` | `wallet` | 지갑 backend |
+| `apps/wallet-ai` | `wallet` | wallet AI internal service |
+| `apps/mock-mydata` | `wallet` | mock MyData internal service |
+| `apps/woori-db` | `woori` | `woori_auth` MySQL |
+| `apps/wallet-db` | `wallet` | `wallet_trial` MySQL |
+| `apps/storage` | cluster-wide | `woori-wallet-gp3` StorageClass |
 
-```hcl
-# services/wallet/terraform.tfvars
-custom_domain_name = "wallet-api.example.com"
-route53_zone_name  = "example.com"
+DB는 RDS가 아니라 EKS pod로 올립니다. 비용 절감이 목적이며, 운영 DB로 쓰려면 별도 backup/snapshot 정책이 필요합니다.
 
-# services/woori/terraform.tfvars
-custom_domain_name = "woori-api.example.com"
-route53_zone_name  = "example.com"
+```text
+woori-backend  -> woori-db.woori.svc.cluster.local:3306/woori_auth
+wallet-backend -> wallet-db.wallet.svc.cluster.local:3306/wallet_trial
+wallet-backend -> woori-db.woori.svc.cluster.local:3306/woori_auth
 ```
 
-이 설정을 넣으면 ACM DNS 검증, API Gateway custom domain, Route53 alias record를 서비스 스택에서 함께 관리합니다.
+## Secret 관리
 
-기본 배포는 비용을 낮추기 위해 node 1대, replica 1개, NAT Gateway 1개를 유지합니다. 운영 안정성이 더 필요해지면 `node_min_size`, `node_desired_size`, 서비스별 `replicas`를 2 이상으로 늘리고 NAT Gateway도 AZ별 구성으로 바꿉니다.
+비밀번호와 token은 Git에 평문으로 저장하지 않습니다. 원본은 SSM Parameter Store SecureString에 둡니다.
 
-보안 관련 기본 옵션:
-
-```hcl
-# services/platform/terraform.tfvars
-cluster_endpoint_private_access      = true
-cluster_endpoint_public_access       = true
-cluster_endpoint_public_access_cidrs = ["203.0.113.10/32"]
-
-# services/wallet 또는 services/woori terraform.tfvars
-api_throttling_burst_limit = 100
-api_throttling_rate_limit  = 50
-
-# JWT issuer/audience를 넣으면 API Gateway JWT authorizer가 켜집니다.
-# jwt_issuer   = "https://issuer.example.com"
-# jwt_audience = ["wallet-api"]
+```text
+/woori-wallet/prod/metrics-token
+/woori-wallet/prod/woori-db-password
+/woori-wallet/prod/woori-db-root-password
+/woori-wallet/prod/wallet-db-password
+/woori-wallet/prod/wallet-db-root-password
 ```
 
-NLB를 pod IP로 직접 붙이는 `load_balancer_target_type = "ip"`는 AWS Load Balancer Controller 설정이 준비된 뒤에 켜는 것을 권장합니다. 기본값은 현재 Kubernetes Service controller와 호환되는 `instance`입니다.
+클러스터 생성 후 Makefile target이 SSM 값을 읽어 Kubernetes Secret을 만듭니다.
 
-## 시작하기
+```sh
+make metrics-secret
+make db-secret
+make monitoring-secret
+make secrets-apply
+```
 
-먼저 Terraform state를 저장할 S3 bucket을 만듭니다.
+생성되는 주요 Secret:
+
+```text
+wallet/metrics-token
+woori/metrics-token
+monitoring/metrics-token
+monitoring/grafana-admin
+woori/woori-db-credentials
+wallet/wallet-db-credentials
+wallet/woori-db-credentials
+```
+
+Grafana admin password를 고정하고 싶으면 로컬에서만 아래처럼 넘깁니다.
+
+```sh
+GRAFANA_ADMIN_PASSWORD='change-me-locally' make monitoring-secret
+```
+
+## GitOps CD
+
+운영 배포 기준 repo는 이 infra repo입니다.
+
+```text
+infra repo: our-AI-has-changed/woori-wallet-infra
+target branch: main
+Argo CD app path: apps/
+ECR prefix: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed
+```
+
+배포 흐름:
+
+```text
+1. 앱 repo에 코드 push
+2. GitHub Actions 테스트/빌드
+3. Docker image를 ECR에 ${GITHUB_SHA} tag로 push
+4. GitHub Actions가 infra repo의 apps/{service}/deployment.yaml image tag 업데이트
+5. infra repo main에 commit
+6. Argo CD가 infra repo main 변경 감지
+7. EKS에 sync
+8. pod가 새 ECR image로 rolling update
+```
+
+서비스별 image manifest:
+
+```text
+wallet-backend -> apps/wallet-backend/deployment.yaml
+woori-backend  -> apps/woori-backend/deployment.yaml
+wallet-ai      -> apps/wallet-ai/deployment.yaml
+mock-mydata    -> apps/mock-mydata/deployment.yaml
+```
+
+주의:
+
+- ECR에 image만 push해도 Argo CD는 배포하지 않습니다.
+- Argo CD는 ECR이 아니라 infra repo `main` 브랜치를 봅니다.
+- 운영 기준으로 `latest` tag는 권장하지 않습니다.
+- rollback은 infra repo의 이전 image tag commit으로 되돌리는 방식입니다.
+- 앱 repo가 infra repo에 commit하려면 `INFRA_REPO_TOKEN` secret이 필요합니다. 최소 권한은 infra repo `contents: read/write`입니다.
+
+## Argo CD와 모니터링
+
+Argo CD는 EKS 생성 후 Helm chart로 설치합니다.
+
+```text
+chart: argo/argo-cd
+chart version: 7.8.27
+namespace: argocd
+values: addons/argocd/values.yaml
+```
+
+모니터링은 AWS Managed Prometheus/Grafana를 쓰지 않고 EKS 내부 `kube-prometheus-stack`을 사용합니다. 이유는 비용 절감입니다.
+
+```text
+chart: prometheus-community/kube-prometheus-stack
+chart version: 70.3.0
+namespace: monitoring
+values: addons/monitoring/values.yaml
+Prometheus retention: 3d
+Prometheus PVC: disabled
+Grafana persistence: disabled
+```
+
+destroy 후 Prometheus 시계열 데이터와 Grafana runtime state는 사라집니다. 하지만 Helm values, dashboard, alert rule, ServiceMonitor, Argo CD Application은 Git에 남기 때문에 다시 apply하면 코드 기준으로 복구됩니다.
+
+Grafana 확인:
+
+```sh
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
+kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' | base64 --decode
+```
+
+로컬 `3000` 포트가 이미 사용 중이면 다른 포트를 씁니다.
+
+```sh
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3001:80
+```
+
+Grafana만 외부 공개가 필요하면 `edge-monitoring`을 사용합니다. 기본 `apply-all`은 비용과 allowlist 실수를 줄이기 위해 Grafana edge를 만들지 않습니다.
+
+```sh
+ENABLE_GRAFANA_EDGE=yes make apply-all
+```
+
+이때 `infra/edge-monitoring/terraform.tfvars`의 `admin_allowed_cidrs`를 실제 관리자/VPN 공인 IP CIDR로 먼저 바꿔야 합니다.
+
+## 빠른 시작
+
+처음 한 번 state bucket을 만듭니다.
 
 ```sh
 make init STACK_MODE=state
@@ -125,68 +253,81 @@ make plan STACK_MODE=state
 make apply STACK_MODE=state
 ```
 
-그 다음 공통 EKS 플랫폼을 만듭니다.
+인프라 전체를 올립니다.
 
 ```sh
 make init SERVICE_MODE=platform
-make plan SERVICE_MODE=platform
-make apply SERVICE_MODE=platform
+make init SERVICE_MODE=edge-woori
+make init SERVICE_MODE=edge-wallet
+make init SERVICE_MODE=edge-monitoring
+make apply-all
 ```
 
-마지막으로 서비스별 Kubernetes 리소스를 배포합니다.
+`apply-all` 순서:
+
+```text
+gitops-guard
+images-verify
+Terraform platform apply
+kubeconfig update
+Argo CD install
+Argo CD Application apply
+monitoring wait
+apps wait
+Terraform edge-woori apply
+Terraform edge-wallet apply
+optional Terraform edge-monitoring apply
+```
+
+서비스 endpoint 확인:
 
 ```sh
-make init SERVICE_MODE=woori
-make validate SERVICE_MODE=woori
-make plan SERVICE_MODE=woori
-make apply SERVICE_MODE=woori
+make output SERVICE_MODE=edge-wallet
+make output SERVICE_MODE=edge-woori
+make output SERVICE_MODE=edge-monitoring
 ```
 
-다른 서비스를 실행하려면 `SERVICE_MODE` 값을 바꿉니다.
+`platform`까지 destroy 후 다시 apply하면 API Gateway 기본 URL은 바뀔 수 있습니다. 고정 URL이 필요하면 Route53 custom domain을 사용합니다.
+
+## 전체 종료
+
+비용 절감을 위해 전체 인프라를 내릴 때는 아래 명령을 사용합니다.
 
 ```sh
-make init SERVICE_MODE=wallet
-make plan SERVICE_MODE=wallet
-make apply SERVICE_MODE=wallet
+CONFIRM_DATA_DELETE=yes make destroy-all
 ```
 
-전체 포맷은 루트에서 실행합니다.
+이 명령은 DB PVC를 삭제하므로 MySQL 데이터도 사라집니다. 데이터가 필요하면 먼저 백업/snapshot 절차를 수행해야 합니다.
 
-```sh
-make fmt
-```
+`destroy-all`은 project Terraform 리소스와 Kubernetes workload/PVC를 대상으로 합니다. AWS 계정의 default VPC/default subnet은 이 프로젝트가 만든 리소스가 아니므로 삭제하지 않습니다.
 
-비용 절감을 위해 전체 인프라를 내릴 때는 서비스 스택을 먼저 내리고 마지막에 platform을 내리는 순서가 중요합니다.
-
-```sh
-make destroy-all
-```
-
-서비스별 값을 바꾸려면 예시 파일을 복사해서 로컬 `terraform.tfvars`를 만듭니다.
-
-```sh
-cp bootstrap/state/terraform.tfvars.example bootstrap/state/terraform.tfvars
-cp services/platform/terraform.tfvars.example services/platform/terraform.tfvars
-cp services/woori/terraform.tfvars.example services/woori/terraform.tfvars
-cp services/wallet/terraform.tfvars.example services/wallet/terraform.tfvars
-```
-
-`terraform.tfvars` 파일은 로컬 값이나 비밀값을 포함할 수 있으므로 git에 커밋하지 않습니다.
-
-## State
+## Terraform state
 
 `bootstrap/state`만 local backend로 시작하고, 나머지 스택은 S3 backend를 사용합니다.
 
-기본 state bucket:
-
 ```text
-woori-wallet-tfstate-655700895912-apne2
+bucket: woori-wallet-tfstate-655700895912-apne2
+
+prd/platform/terraform.tfstate
+prd/edge-woori/terraform.tfstate
+prd/edge-wallet/terraform.tfstate
+prd/edge-monitoring/terraform.tfstate
 ```
 
-state key:
+기존 `prd/wallet/terraform.tfstate` 또는 `prd/woori/terraform.tfstate`에 리소스가 남아 있는 환경에서 새 key로 바로 apply하면 중복 생성될 수 있습니다. 기존 환경이 남아 있다면 state migrate/import를 먼저 해야 합니다.
 
-```text
-prd/platform/terraform.tfstate
-prd/woori/terraform.tfstate
-prd/wallet/terraform.tfstate
+## 자주 쓰는 명령
+
+```sh
+make fmt
+make validate SERVICE_MODE=platform
+make plan SERVICE_MODE=edge-wallet
+make apply SERVICE_MODE=edge-wallet
+make output SERVICE_MODE=edge-wallet
+
+kubectl get pods -A
+kubectl get applications -n argocd
+kubectl get svc -n wallet
+kubectl get svc -n woori
+kubectl get svc -n monitoring
 ```
