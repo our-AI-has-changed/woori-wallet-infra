@@ -154,10 +154,29 @@ state bucket은 비용이 거의 작고, 전체 destroy 후 재기동을 위해 
 Makefile이 SSM 값을 읽어서 Kubernetes Secret을 생성합니다.
 
 ```sh
+make ssm-parameters-check
 make metrics-secret
 make db-secret
 make monitoring-secret
 make secrets-apply
+```
+
+처음 테스트 환경에서 값이 아직 없다면 아래 명령으로 누락된 파라미터만 랜덤 SecureString으로 생성할 수 있습니다.
+
+```sh
+CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
+```
+
+이 명령은 이미 존재하는 값을 덮어쓰지 않습니다. 운영에서 정해진 DB 비밀번호를 사용해야 한다면 AWS 콘솔 또는 AWS CLI로 SecureString을 직접 만든 뒤 아래 명령으로 확인합니다.
+
+```sh
+make ssm-parameters-check
+```
+
+`make apply-all`은 `platform`을 만들기 전에 `ssm-parameters-ensure`를 실행합니다. 기본값은 누락된 SSM Parameter가 있으면 초기에 실패시키는 방식입니다. 자동 생성을 원할 때만 아래처럼 명시합니다.
+
+```sh
+CREATE_MISSING_SSM_PARAMETERS=yes make apply-all
 ```
 
 생성되는 Secret:
@@ -475,15 +494,16 @@ make apply-all
 ```text
 1. gitops-guard
 2. images-verify
-3. terraform apply SERVICE_MODE=platform
-4. aws eks update-kubeconfig
-5. Helm으로 Argo CD 설치
-6. Argo CD Application manifest 적용
-7. monitoring Secret 확인 및 Grafana 준비 대기
-8. app Secret 확인 및 app/DB 준비 대기
-9. terraform apply SERVICE_MODE=edge-woori
-10. terraform apply SERVICE_MODE=edge-wallet
-11. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
+3. ssm-parameters-ensure
+4. terraform apply SERVICE_MODE=platform
+5. aws eks update-kubeconfig
+6. Helm으로 Argo CD 설치
+7. Argo CD Application manifest 적용
+8. monitoring Secret 확인 및 Grafana 준비 대기
+9. app Secret 확인 및 app/DB 준비 대기
+10. terraform apply SERVICE_MODE=edge-woori
+11. terraform apply SERVICE_MODE=edge-wallet
+12. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
 ```
 
 `gitops-guard`는 다음을 확인합니다.
@@ -495,6 +515,8 @@ local HEAD가 origin/main과 같은지
 ```
 
 `images-verify`는 `apps/*/deployment.yaml`이 가리키는 ECR image tag가 실제 ECR에 존재하는지 확인합니다.
+
+`ssm-parameters-ensure`는 필수 SSM Parameter 5개가 있는지 확인합니다. `CREATE_MISSING_SSM_PARAMETERS=yes`가 있으면 누락된 값만 랜덤 SecureString으로 생성하고, 없으면 누락 목록을 출력하고 실패합니다. 이 검사를 `platform` apply 전에 실행하는 이유는 EKS/NAT를 만든 뒤 `db-secret`에서 뒤늦게 실패하는 상황을 막기 위해서입니다.
 
 수동으로 나눠서 올릴 때:
 
@@ -788,6 +810,24 @@ manifest가 가리키는 image tag가 ECR에 없다는 뜻입니다.
 앱 repo GitHub Actions가 ECR push를 완료했는지 확인합니다.
 infra repo deployment.yaml image tag가 실제 존재하는 tag인지 확인합니다.
 ```
+
+### `db-secret` 또는 `ssm-parameters-check` 실패
+
+필수 SSM Parameter가 없거나 권한이 부족한 상태입니다.
+
+확인:
+
+```sh
+make ssm-parameters-check
+```
+
+누락된 값을 테스트용 랜덤값으로 만들 때:
+
+```sh
+CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
+```
+
+운영 비밀번호가 정해져 있으면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만듭니다. 이미 PVC가 존재하는 DB의 경우 SSM 값을 바꿔도 MySQL 내부 사용자 비밀번호가 자동으로 바뀌지는 않습니다.
 
 ### platform을 먼저 destroy한 경우
 

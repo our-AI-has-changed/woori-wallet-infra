@@ -11,10 +11,11 @@ WALLET_DB_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-password
 WALLET_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-root-password
 FORCE_GRAFANA_ADMIN_PASSWORD ?= no
 ENABLE_GRAFANA_EDGE ?= no
+CREATE_MISSING_SSM_PARAMETERS ?= no
 CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(STACK_MODE)))
 TF_DIR := $(if $(filter state,$(CANONICAL_STACK)),bootstrap/state,infra/$(CANONICAL_STACK))
 
-.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify argocd-install argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy destroy-all output
+.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure argocd-install argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy destroy-all output
 
 init:
 	terraform -chdir=$(TF_DIR) init -reconfigure
@@ -50,6 +51,54 @@ images-verify:
 		echo "Checking ECR image $$repository_name:$$tag"; \
 		aws ecr describe-images --region $(AWS_REGION) --repository-name "$$repository_name" --image-ids imageTag="$$tag" >/dev/null; \
 	done
+
+ssm-parameters-check:
+	@set -e; \
+	missing=""; \
+	for name in \
+		"$(METRICS_TOKEN_PARAMETER)" \
+		"$(WOORI_DB_PASSWORD_PARAMETER)" \
+		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
+		"$(WALLET_DB_PASSWORD_PARAMETER)" \
+		"$(WALLET_DB_ROOT_PASSWORD_PARAMETER)"; do \
+		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption >/dev/null 2>&1; then \
+			echo "SSM parameter exists: $$name"; \
+		else \
+			missing="$$missing $$name"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing required SSM parameters:"; \
+		for name in $$missing; do echo "  - $$name"; done; \
+		echo "Create them manually as SecureString, or run:"; \
+		echo "  CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap"; \
+		exit 1; \
+	fi
+
+ssm-parameters-bootstrap:
+	@test "$(CREATE_MISSING_SSM_PARAMETERS)" = "yes" || { echo "This creates missing SecureString parameters. Re-run with CREATE_MISSING_SSM_PARAMETERS=yes."; exit 1; }
+	@set -e; \
+	for name in \
+		"$(METRICS_TOKEN_PARAMETER)" \
+		"$(WOORI_DB_PASSWORD_PARAMETER)" \
+		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
+		"$(WALLET_DB_PASSWORD_PARAMETER)" \
+		"$(WALLET_DB_ROOT_PASSWORD_PARAMETER)"; do \
+		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption >/dev/null 2>&1; then \
+			echo "SSM parameter already exists: $$name"; \
+		else \
+			value="$$(openssl rand -base64 32)"; \
+			aws ssm put-parameter --region $(AWS_REGION) --name "$$name" --type SecureString --value "$$value" >/dev/null; \
+			echo "Created SSM SecureString: $$name"; \
+		fi; \
+	done
+
+ssm-parameters-ensure:
+	@if [ "$(CREATE_MISSING_SSM_PARAMETERS)" = "yes" ]; then \
+		$(MAKE) ssm-parameters-bootstrap CREATE_MISSING_SSM_PARAMETERS=yes; \
+	else \
+		$(MAKE) ssm-parameters-check; \
+	fi
 
 argocd-install:
 	kubectl apply -f addons/argocd/namespace.yaml
@@ -257,6 +306,7 @@ destroy-all:
 apply-all:
 	$(MAKE) gitops-guard
 	$(MAKE) images-verify
+	$(MAKE) ssm-parameters-ensure
 	$(MAKE) apply SERVICE_MODE=platform
 	$(MAKE) update-kubeconfig
 	$(MAKE) argocd-install

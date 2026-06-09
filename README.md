@@ -132,11 +132,20 @@ wallet-backend -> woori-db.woori.svc.cluster.local:3306/woori_auth
 클러스터 생성 후 Makefile target이 SSM 값을 읽어 Kubernetes Secret을 만듭니다.
 
 ```sh
+make ssm-parameters-check
 make metrics-secret
 make db-secret
 make monitoring-secret
 make secrets-apply
 ```
+
+처음 테스트 환경을 올릴 때 값이 아직 없으면, 없는 파라미터만 랜덤 SecureString으로 만들 수 있습니다.
+
+```sh
+CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
+```
+
+이 타깃은 이미 존재하는 SSM 값은 덮어쓰지 않습니다. 운영에서 정해진 DB 비밀번호를 써야 한다면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만든 뒤 `make ssm-parameters-check`로 확인합니다.
 
 생성되는 주요 Secret:
 
@@ -268,6 +277,7 @@ make apply-all
 ```text
 gitops-guard
 images-verify
+SSM parameter check/bootstrap
 Terraform platform apply
 kubeconfig update
 Argo CD install
