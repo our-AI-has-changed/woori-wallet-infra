@@ -91,11 +91,13 @@ API Gateway는 `$default` route로 들어온 요청을 shared ALB로 넘기고, 
 기본값은 비용과 최소 운영 여유를 같이 고려한 구성입니다.
 
 ```text
-EKS node group: t3.small, min 2 / desired 2 / max 2
+EKS node group: t3.medium, min 2 / desired 2 / max 2
 NAT Gateway: 1개
 app replicas: 1
 DB: EKS 내부 MySQL StatefulSet 2개, 각 PVC 5Gi
 ```
+
+`t3.small` 2대로는 Argo CD, kube-prometheus-stack, 앱 4개, MySQL DB 2개를 함께 올릴 때 메모리와 pod 수가 부족해 일부 workload가 Pending 상태가 될 수 있습니다. 그래서 현재 기본값은 비용을 크게 늘리지 않으면서 전체 스택이 올라가는 최소 기준인 `t3.medium` 2대로 둡니다.
 
 앱 manifest는 `apps/` 아래에 있습니다.
 

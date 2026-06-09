@@ -19,7 +19,7 @@ Grafana 외부 공개는 선택 사항이며 기본 apply-all에서는 만들지
 ```text
 Region: ap-northeast-2
 AWS account: 655700895912
-EKS node group: t3.small, min 2 / desired 2 / max 2
+EKS node group: t3.medium, min 2 / desired 2 / max 2
 NAT Gateway: 1개
 app replicas: 1
 DB: EKS 내부 MySQL StatefulSet 2개, 각 PVC 5Gi
@@ -27,6 +27,8 @@ Prometheus retention: 3d
 Prometheus PVC: disabled
 Grafana persistence: disabled
 ```
+
+`t3.small` 2대 구성은 Argo CD, 모니터링, 앱 4개, MySQL DB 2개를 동시에 올릴 때 메모리와 pod 수 부족으로 workload가 Pending될 수 있습니다. 현재 기본값은 전체 스택을 한 번에 검증할 수 있는 최소 운영 기준으로 `t3.medium` 2대를 사용합니다.
 
 ## 2. 저장소 구조
 
@@ -756,6 +758,7 @@ DB pod는 저렴하지만 backup/restore 책임이 커집니다.
 NAT 1개는 저렴하지만 AZ 장애에 약합니다.
 replica 1개는 저렴하지만 pod 장애에 약합니다.
 node 2대는 Argo CD/모니터링/앱/DB를 같이 올리기 위한 최소 여유입니다.
+node type은 `t3.medium`을 기본값으로 둡니다. `t3.small`은 더 저렴하지만 현재 전체 스택에서는 메모리와 pod 수가 부족할 수 있습니다.
 ```
 
 ## 17. 자주 발생하는 문제
