@@ -158,6 +158,7 @@ Makefile이 SSM 값을 읽어서 Kubernetes Secret을 생성합니다.
 
 ```sh
 make ssm-parameters-check
+make argocd-repo-token-check
 make argocd-repo-secret
 make metrics-secret
 make db-secret
@@ -165,7 +166,7 @@ make monitoring-secret
 make secrets-apply
 ```
 
-처음 테스트 환경에서 값이 아직 없다면 아래 명령으로 누락된 파라미터만 랜덤 SecureString으로 생성할 수 있습니다.
+처음 테스트 환경에서 DB password와 metrics token이 아직 없다면 아래 명령으로 누락된 파라미터만 랜덤 SecureString으로 생성할 수 있습니다.
 
 ```sh
 CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
@@ -177,7 +178,7 @@ CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 make ssm-parameters-check
 ```
 
-`/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 됩니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣습니다. 초기 구성은 fine-grained PAT 기준이며, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다.
+`/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 되므로 bootstrap 대상이 아닙니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣습니다. 초기 구성은 fine-grained PAT 기준이며, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다. `make argocd-repo-token-check`로 token이 실제 repo를 읽을 수 있는지 미리 검증합니다.
 
 `make apply-all`은 `platform`을 만들기 전에 `ssm-parameters-ensure`를 실행합니다. 기본값은 누락된 SSM Parameter가 있으면 초기에 실패시키는 방식입니다. 자동 생성을 원할 때만 아래처럼 명시합니다.
 
@@ -341,6 +342,7 @@ values: addons/argocd/values.yaml
 
 ```sh
 make argocd-install
+make argocd-repo-token-check
 make argocd-repo-secret
 make addons-apply
 ```
@@ -532,7 +534,7 @@ local HEAD가 origin/main과 같은지
 
 `images-verify`는 `apps/*/deployment.yaml`이 가리키는 ECR image tag가 실제 ECR에 존재하는지 확인합니다.
 
-`ssm-parameters-ensure`는 필수 SSM Parameter 5개가 있는지 확인합니다. `CREATE_MISSING_SSM_PARAMETERS=yes`가 있으면 누락된 값만 랜덤 SecureString으로 생성하고, 없으면 누락 목록을 출력하고 실패합니다. 이 검사를 `platform` apply 전에 실행하는 이유는 EKS/NAT를 만든 뒤 `db-secret`에서 뒤늦게 실패하는 상황을 막기 위해서입니다.
+`ssm-parameters-ensure`는 필수 SSM Parameter 6개가 있는지 확인합니다. `CREATE_MISSING_SSM_PARAMETERS=yes`가 있으면 DB password와 metrics token의 누락 값만 랜덤 SecureString으로 생성하고, Argo CD infra repo token은 직접 만든 실제 GitHub token이 없으면 실패합니다. 이 검사를 `platform` apply 전에 실행하는 이유는 EKS/NAT를 만든 뒤 Secret 생성이나 Argo CD sync에서 뒤늦게 실패하는 상황을 막기 위해서입니다.
 
 수동으로 나눠서 올릴 때:
 
@@ -871,6 +873,7 @@ infra repo가 private인데 Argo CD repository credential이 없거나 token 권
 
 ```sh
 make ssm-parameters-check
+make argocd-repo-token-check
 make argocd-repo-secret
 kubectl -n argocd get secret woori-wallet-infra-repo
 kubectl get applications -n argocd

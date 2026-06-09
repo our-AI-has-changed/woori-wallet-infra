@@ -136,6 +136,7 @@ wallet-backend -> woori-db.woori.svc.cluster.local:3306/woori_auth
 
 ```sh
 make ssm-parameters-check
+make argocd-repo-token-check
 make argocd-repo-secret
 make metrics-secret
 make db-secret
@@ -143,7 +144,7 @@ make monitoring-secret
 make secrets-apply
 ```
 
-처음 테스트 환경을 올릴 때 값이 아직 없으면, 없는 파라미터만 랜덤 SecureString으로 만들 수 있습니다.
+처음 테스트 환경을 올릴 때 DB password와 metrics token이 아직 없으면, 없는 파라미터만 랜덤 SecureString으로 만들 수 있습니다.
 
 ```sh
 CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
@@ -151,7 +152,7 @@ CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 
 이 타깃은 이미 존재하는 SSM 값은 덮어쓰지 않습니다. 운영에서 정해진 DB 비밀번호를 써야 한다면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만든 뒤 `make ssm-parameters-check`로 확인합니다.
 
-`/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 됩니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣어야 합니다. 초기 구성은 fine-grained PAT를 사용하고, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다.
+`/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 되므로 bootstrap 대상이 아닙니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣어야 합니다. 초기 구성은 fine-grained PAT를 사용하고, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다. `make argocd-repo-token-check`로 token이 실제 repo를 읽을 수 있는지 미리 검증합니다.
 
 생성되는 주요 Secret:
 

@@ -17,7 +17,7 @@ CREATE_MISSING_SSM_PARAMETERS ?= no
 CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(STACK_MODE)))
 TF_DIR := $(if $(filter state,$(CANONICAL_STACK)),bootstrap/state,infra/$(CANONICAL_STACK))
 
-.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure argocd-install argocd-repo-secret argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all output
+.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all output
 
 init:
 	terraform -chdir=$(TF_DIR) init -reconfigure
@@ -57,6 +57,8 @@ images-verify:
 ssm-parameters-check:
 	@set -e; \
 	missing=""; \
+	err_file="$$(mktemp)"; \
+	trap 'rm -f "$$err_file"' EXIT; \
 	for name in \
 		"$(METRICS_TOKEN_PARAMETER)" \
 		"$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" \
@@ -64,11 +66,16 @@ ssm-parameters-check:
 		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_ROOT_PASSWORD_PARAMETER)"; do \
-		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption --output json >/dev/null 2>&1; then \
+		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption --output json >/dev/null 2>"$$err_file"; then \
 			echo "SSM parameter exists: $$name"; \
-		else \
+		elif grep -q "ParameterNotFound" "$$err_file"; then \
 			missing="$$missing $$name"; \
+		else \
+			echo "Failed to check SSM parameter: $$name"; \
+			cat "$$err_file"; \
+			exit 1; \
 		fi; \
+		: > "$$err_file"; \
 	done; \
 	if [ -n "$$missing" ]; then \
 		echo "Missing required SSM parameters:"; \
@@ -82,19 +89,26 @@ ssm-parameters-check:
 ssm-parameters-bootstrap:
 	@test "$(CREATE_MISSING_SSM_PARAMETERS)" = "yes" || { echo "This creates missing SecureString parameters. Re-run with CREATE_MISSING_SSM_PARAMETERS=yes."; exit 1; }
 	@set -e; \
+	err_file="$$(mktemp)"; \
+	trap 'rm -f "$$err_file"' EXIT; \
 	for name in \
 		"$(METRICS_TOKEN_PARAMETER)" \
 		"$(WOORI_DB_PASSWORD_PARAMETER)" \
 		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_ROOT_PASSWORD_PARAMETER)"; do \
-		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption --output json >/dev/null 2>&1; then \
+		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption --output json >/dev/null 2>"$$err_file"; then \
 			echo "SSM parameter already exists: $$name"; \
-		else \
+		elif grep -q "ParameterNotFound" "$$err_file"; then \
 			value="$$(openssl rand -base64 32)"; \
 			aws ssm put-parameter --region $(AWS_REGION) --name "$$name" --type SecureString --value "$$value" --output json >/dev/null; \
 			echo "Created SSM SecureString: $$name"; \
+		else \
+			echo "Failed to check SSM parameter: $$name"; \
+			cat "$$err_file"; \
+			exit 1; \
 		fi; \
+		: > "$$err_file"; \
 	done
 
 ssm-parameters-ensure:
@@ -110,7 +124,22 @@ argocd-install:
 	helm upgrade --install argocd argo/argo-cd --namespace argocd --create-namespace --version $(ARGOCD_CHART_VERSION) --values addons/argocd/values.yaml --wait --timeout 300s
 	kubectl wait --for condition=Established crd/applications.argoproj.io --timeout=120s
 
-argocd-repo-secret:
+argocd-repo-token-check:
+	@set -e; \
+	token="$$(aws ssm get-parameter --region $(AWS_REGION) --name "$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" --with-decryption --query Parameter.Value --output text)"; \
+	repo_path="$$(printf '%s\n' "$(ARGOCD_INFRA_REPO_URL)" | sed -E 's#^https://github.com/##; s#\.git$$##')"; \
+	status="$$(curl -sS -o /dev/null -w '%{http_code}' \
+		-H "Authorization: Bearer $$token" \
+		-H "Accept: application/vnd.github+json" \
+		"https://api.github.com/repos/$$repo_path")"; \
+	if [ "$$status" != "200" ]; then \
+		echo "Argo CD infra repo token cannot read $$repo_path. GitHub API status: $$status"; \
+		echo "Update $(ARGOCD_INFRA_REPO_TOKEN_PARAMETER) with a token that has contents:read access."; \
+		exit 1; \
+	fi; \
+	echo "Argo CD infra repo token can read $$repo_path"
+
+argocd-repo-secret: argocd-repo-token-check
 	kubectl apply -f addons/argocd/namespace.yaml
 	@set -e; \
 	token="$$(aws ssm get-parameter --region $(AWS_REGION) --name "$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" --with-decryption --query Parameter.Value --output text)"; \
@@ -279,6 +308,10 @@ deploy-apps:
 
 workloads-delete:
 	@set -e; \
+	if ! kubectl get --raw=/readyz >/dev/null 2>&1; then \
+		echo "Kubernetes API unavailable; skipping workload cleanup."; \
+		exit 0; \
+	fi; \
 	if kubectl api-resources --api-group=argoproj.io --no-headers 2>/dev/null | awk '{print $$1}' | grep -qx applications; then \
 		for application in woori-wallet-monitoring woori-wallet-apps; do \
 			application_name="$$(kubectl -n argocd get application "$$application" --ignore-not-found -o name)"; \
@@ -289,19 +322,24 @@ workloads-delete:
 		done; \
 	else \
 		echo "Argo CD Application CRD is not installed; skipping Application delete."; \
-	fi
-	kubectl -n wallet delete deployment wallet-backend wallet-ai mock-mydata --ignore-not-found=true --wait=true --timeout=300s
-	kubectl -n woori delete deployment woori-backend --ignore-not-found=true --wait=true --timeout=300s
-	kubectl -n wallet delete statefulset wallet-db --ignore-not-found=true --wait=true --timeout=300s
-	kubectl -n woori delete statefulset woori-db --ignore-not-found=true --wait=true --timeout=300s
-	kubectl -n wallet delete service wallet-backend wallet-ai mock-mydata wallet-db --ignore-not-found=true --wait=true --timeout=300s
-	kubectl -n woori delete service woori-backend woori-db --ignore-not-found=true --wait=true --timeout=300s
+	fi; \
+	kubectl -n wallet delete deployment wallet-backend wallet-ai mock-mydata --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n woori delete deployment woori-backend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n wallet delete statefulset wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n woori delete statefulset woori-db --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n wallet delete service wallet-backend wallet-ai mock-mydata wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n woori delete service woori-backend woori-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl delete namespace monitoring argocd --ignore-not-found=true --wait=true --timeout=300s
 
 data-delete: confirm-data-delete
-	kubectl -n wallet delete pvc data-wallet-db-0 --ignore-not-found=true --wait=true --timeout=300s
-	kubectl -n woori delete pvc data-woori-db-0 --ignore-not-found=true --wait=true --timeout=300s
-	kubectl delete namespace wallet woori --ignore-not-found=true --wait=true --timeout=300s
+	@set -e; \
+	if ! kubectl get --raw=/readyz >/dev/null 2>&1; then \
+		echo "Kubernetes API unavailable; skipping PVC and namespace cleanup."; \
+		exit 0; \
+	fi; \
+	kubectl -n wallet delete pvc data-wallet-db-0 --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n woori delete pvc data-woori-db-0 --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl delete namespace wallet woori --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl delete storageclass woori-wallet-gp3 --ignore-not-found=true --wait=true --timeout=300s
 
 confirm-data-delete:
