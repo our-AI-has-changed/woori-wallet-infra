@@ -147,6 +147,7 @@ state bucket은 비용이 거의 작고, 전체 destroy 후 재기동을 위해 
 
 ```text
 /woori-wallet/prod/metrics-token
+/woori-wallet/prod/argocd-infra-repo-token
 /woori-wallet/prod/woori-db-password
 /woori-wallet/prod/woori-db-root-password
 /woori-wallet/prod/wallet-db-password
@@ -157,6 +158,7 @@ Makefile이 SSM 값을 읽어서 Kubernetes Secret을 생성합니다.
 
 ```sh
 make ssm-parameters-check
+make argocd-repo-secret
 make metrics-secret
 make db-secret
 make monitoring-secret
@@ -175,6 +177,8 @@ CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 make ssm-parameters-check
 ```
 
+`/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 됩니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣습니다. 초기 구성은 fine-grained PAT 기준이며, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다.
+
 `make apply-all`은 `platform`을 만들기 전에 `ssm-parameters-ensure`를 실행합니다. 기본값은 누락된 SSM Parameter가 있으면 초기에 실패시키는 방식입니다. 자동 생성을 원할 때만 아래처럼 명시합니다.
 
 ```sh
@@ -184,6 +188,12 @@ CREATE_MISSING_SSM_PARAMETERS=yes make apply-all
 생성되는 Secret:
 
 ```text
+argocd/woori-wallet-infra-repo:
+  type
+  url
+  username
+  password
+
 wallet/metrics-token: METRICS_TOKEN
 woori/metrics-token: METRICS_TOKEN
 monitoring/metrics-token: METRICS_TOKEN
@@ -331,6 +341,7 @@ values: addons/argocd/values.yaml
 
 ```sh
 make argocd-install
+make argocd-repo-secret
 make addons-apply
 ```
 
@@ -349,6 +360,8 @@ woori-wallet-monitoring
   source 3: addons/monitoring manifest
   syncPolicy: automated prune/selfHeal
 ```
+
+private infra repo를 쓰므로 Argo CD Application 적용 전에 repository credential Secret이 필요합니다. `make argocd-repo-secret`은 SSM의 `/woori-wallet/prod/argocd-infra-repo-token` 값을 읽어 `argocd/woori-wallet-infra-repo` Secret을 생성합니다. 이 Secret이 없으면 `authentication required` 또는 `Repository not found`로 sync가 실패합니다.
 
 Argo CD server는 기본 `ClusterIP`입니다. 외부 공개하지 않습니다.
 
@@ -500,12 +513,13 @@ make apply-all
 4. terraform apply SERVICE_MODE=platform
 5. aws eks update-kubeconfig
 6. Helm으로 Argo CD 설치
-7. Argo CD Application manifest 적용
-8. monitoring Secret 확인 및 Grafana 준비 대기
-9. app Secret 확인 및 app/DB 준비 대기
-10. terraform apply SERVICE_MODE=edge-woori
-11. terraform apply SERVICE_MODE=edge-wallet
-12. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
+7. Argo CD infra repo credential Secret 적용
+8. Argo CD Application manifest 적용
+9. monitoring Secret 확인 및 Grafana 준비 대기
+10. app Secret 확인 및 app/DB 준비 대기
+11. terraform apply SERVICE_MODE=edge-woori
+12. terraform apply SERVICE_MODE=edge-wallet
+13. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
 ```
 
 `gitops-guard`는 다음을 확인합니다.
@@ -575,9 +589,26 @@ Grafana 확인:
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3000:80
 ```
 
-## 12. 전체 종료 절차
+## 12. 서버 중지와 전체 종료 절차
 
-비용을 줄이려면 service edge와 platform을 모두 내립니다. `bootstrap/state`는 유지합니다.
+DB 데이터를 보존하면서 외부 API와 실행 중인 workload만 내릴 때는 아래 명령을 사용합니다.
+
+```sh
+make stop-all
+```
+
+`stop-all` 내부 순서:
+
+```text
+1. terraform destroy SERVICE_MODE=edge-monitoring
+2. terraform destroy SERVICE_MODE=edge-wallet
+3. terraform destroy SERVICE_MODE=edge-woori
+4. workloads-delete
+```
+
+이 명령은 DB PVC와 platform 리소스를 유지합니다. MySQL 데이터는 남지만, EKS control plane, NAT Gateway, node group 비용은 계속 발생합니다.
+
+비용을 더 줄이려면 service edge와 platform을 모두 내립니다. `bootstrap/state`는 유지합니다.
 
 권장 명령:
 
@@ -831,6 +862,21 @@ CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 ```
 
 운영 비밀번호가 정해져 있으면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만듭니다. 이미 PVC가 존재하는 DB의 경우 SSM 값을 바꿔도 MySQL 내부 사용자 비밀번호가 자동으로 바뀌지는 않습니다.
+
+### Argo CD Application이 `authentication required` 또는 `Repository not found`
+
+infra repo가 private인데 Argo CD repository credential이 없거나 token 권한이 부족한 상태입니다.
+
+확인:
+
+```sh
+make ssm-parameters-check
+make argocd-repo-secret
+kubectl -n argocd get secret woori-wallet-infra-repo
+kubectl get applications -n argocd
+```
+
+`/woori-wallet/prod/argocd-infra-repo-token`에는 infra repo를 읽을 수 있는 GitHub token을 SecureString으로 넣습니다. 앱 repo CI가 infra repo에 push할 때 쓰는 `INFRA_REPO_TOKEN`은 read/write 권한이고, Argo CD token은 read 권한으로 분리하는 것을 권장합니다.
 
 ### platform을 먼저 destroy한 경우
 

@@ -125,6 +125,7 @@ wallet-backend -> woori-db.woori.svc.cluster.local:3306/woori_auth
 
 ```text
 /woori-wallet/prod/metrics-token
+/woori-wallet/prod/argocd-infra-repo-token
 /woori-wallet/prod/woori-db-password
 /woori-wallet/prod/woori-db-root-password
 /woori-wallet/prod/wallet-db-password
@@ -135,6 +136,7 @@ wallet-backend -> woori-db.woori.svc.cluster.local:3306/woori_auth
 
 ```sh
 make ssm-parameters-check
+make argocd-repo-secret
 make metrics-secret
 make db-secret
 make monitoring-secret
@@ -149,9 +151,12 @@ CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 
 이 타깃은 이미 존재하는 SSM 값은 덮어쓰지 않습니다. 운영에서 정해진 DB 비밀번호를 써야 한다면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만든 뒤 `make ssm-parameters-check`로 확인합니다.
 
+`/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 됩니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣어야 합니다. 초기 구성은 fine-grained PAT를 사용하고, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다.
+
 생성되는 주요 Secret:
 
 ```text
+argocd/woori-wallet-infra-repo
 wallet/metrics-token
 woori/metrics-token
 monitoring/metrics-token
@@ -207,6 +212,7 @@ mock-mydata    -> apps/mock-mydata/deployment.yaml
 - 운영 기준으로 `latest` tag는 권장하지 않습니다.
 - rollback은 infra repo의 이전 image tag commit으로 되돌리는 방식입니다.
 - 앱 repo가 infra repo에 commit하려면 `INFRA_REPO_TOKEN` secret이 필요합니다. 최소 권한은 infra repo `contents: read/write`입니다.
+- Argo CD가 private infra repo를 읽으려면 `/woori-wallet/prod/argocd-infra-repo-token` SSM 값이 필요합니다. 이 값은 Argo CD repository Secret으로 변환되며, 권한은 infra repo `contents: read`만 주는 것을 권장합니다.
 
 ## Argo CD와 모니터링
 
@@ -218,6 +224,8 @@ chart version: 7.8.27
 namespace: argocd
 values: addons/argocd/values.yaml
 ```
+
+Argo CD Application을 적용하기 전에 `make argocd-repo-secret`이 SSM의 `/woori-wallet/prod/argocd-infra-repo-token` 값을 읽어 `argocd/woori-wallet-infra-repo` Secret을 만듭니다. 이 Secret이 없으면 private infra repo를 읽지 못해 Application sync가 `authentication required` 또는 `Repository not found`로 실패합니다.
 
 모니터링은 AWS Managed Prometheus/Grafana를 쓰지 않고 EKS 내부 `kube-prometheus-stack`을 사용합니다. 이유는 비용 절감입니다.
 
@@ -283,6 +291,7 @@ SSM parameter check/bootstrap
 Terraform platform apply
 kubeconfig update
 Argo CD install
+Argo CD infra repo credential apply
 Argo CD Application apply
 monitoring wait
 apps wait
@@ -301,9 +310,17 @@ make output SERVICE_MODE=edge-monitoring
 
 `platform`까지 destroy 후 다시 apply하면 API Gateway 기본 URL은 바뀔 수 있습니다. 고정 URL이 필요하면 Route53 custom domain을 사용합니다.
 
-## 전체 종료
+## 서버 중지와 전체 종료
 
-비용 절감을 위해 전체 인프라를 내릴 때는 아래 명령을 사용합니다.
+DB 데이터를 보존하면서 외부 API와 실행 중인 workload만 내릴 때는 아래 명령을 사용합니다.
+
+```sh
+make stop-all
+```
+
+이 명령은 wallet/woori/Grafana public edge와 Kubernetes app/DB/monitoring/Argo CD workload를 내립니다. DB PVC와 platform 리소스는 유지하므로 MySQL 데이터는 남지만, EKS control plane, NAT Gateway, node group 비용은 계속 발생합니다.
+
+비용 절감을 위해 platform까지 전체 인프라를 내릴 때는 아래 명령을 사용합니다.
 
 ```sh
 CONFIRM_DATA_DELETE=yes make destroy-all

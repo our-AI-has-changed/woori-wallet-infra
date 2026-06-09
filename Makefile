@@ -5,6 +5,8 @@ ECR_REGISTRY ?= 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com
 ARGOCD_CHART_VERSION ?= 7.8.27
 GIT_BRANCH ?= main
 METRICS_TOKEN_PARAMETER ?= /woori-wallet/prod/metrics-token
+ARGOCD_INFRA_REPO_URL ?= https://github.com/our-AI-has-changed/woori-wallet-infra.git
+ARGOCD_INFRA_REPO_TOKEN_PARAMETER ?= /woori-wallet/prod/argocd-infra-repo-token
 WOORI_DB_PASSWORD_PARAMETER ?= /woori-wallet/prod/woori-db-password
 WOORI_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/woori-db-root-password
 WALLET_DB_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-password
@@ -15,7 +17,7 @@ CREATE_MISSING_SSM_PARAMETERS ?= no
 CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(STACK_MODE)))
 TF_DIR := $(if $(filter state,$(CANONICAL_STACK)),bootstrap/state,infra/$(CANONICAL_STACK))
 
-.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure argocd-install argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy destroy-all output
+.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure argocd-install argocd-repo-secret argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all output
 
 init:
 	terraform -chdir=$(TF_DIR) init -reconfigure
@@ -49,7 +51,7 @@ images-verify:
 		tag=$${image##*:}; \
 		repository_name=$${repository#$(ECR_REGISTRY)/}; \
 		echo "Checking ECR image $$repository_name:$$tag"; \
-		aws ecr describe-images --region $(AWS_REGION) --repository-name "$$repository_name" --image-ids imageTag="$$tag" >/dev/null; \
+		aws ecr describe-images --region $(AWS_REGION) --repository-name "$$repository_name" --image-ids imageTag="$$tag" --output json >/dev/null; \
 	done
 
 ssm-parameters-check:
@@ -57,11 +59,12 @@ ssm-parameters-check:
 	missing=""; \
 	for name in \
 		"$(METRICS_TOKEN_PARAMETER)" \
+		"$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" \
 		"$(WOORI_DB_PASSWORD_PARAMETER)" \
 		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_ROOT_PASSWORD_PARAMETER)"; do \
-		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption >/dev/null 2>&1; then \
+		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption --output json >/dev/null 2>&1; then \
 			echo "SSM parameter exists: $$name"; \
 		else \
 			missing="$$missing $$name"; \
@@ -70,8 +73,9 @@ ssm-parameters-check:
 	if [ -n "$$missing" ]; then \
 		echo "Missing required SSM parameters:"; \
 		for name in $$missing; do echo "  - $$name"; done; \
-		echo "Create them manually as SecureString, or run:"; \
+		echo "Create secrets manually as SecureString. Non-GitHub random test values can be bootstrapped with:"; \
 		echo "  CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap"; \
+		echo "The Argo CD infra repo token must be a real GitHub token with read access to the infra repo."; \
 		exit 1; \
 	fi
 
@@ -84,11 +88,11 @@ ssm-parameters-bootstrap:
 		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_PASSWORD_PARAMETER)" \
 		"$(WALLET_DB_ROOT_PASSWORD_PARAMETER)"; do \
-		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption >/dev/null 2>&1; then \
+		if aws ssm get-parameter --region $(AWS_REGION) --name "$$name" --with-decryption --output json >/dev/null 2>&1; then \
 			echo "SSM parameter already exists: $$name"; \
 		else \
 			value="$$(openssl rand -base64 32)"; \
-			aws ssm put-parameter --region $(AWS_REGION) --name "$$name" --type SecureString --value "$$value" >/dev/null; \
+			aws ssm put-parameter --region $(AWS_REGION) --name "$$name" --type SecureString --value "$$value" --output json >/dev/null; \
 			echo "Created SSM SecureString: $$name"; \
 		fi; \
 	done
@@ -96,9 +100,8 @@ ssm-parameters-bootstrap:
 ssm-parameters-ensure:
 	@if [ "$(CREATE_MISSING_SSM_PARAMETERS)" = "yes" ]; then \
 		$(MAKE) ssm-parameters-bootstrap CREATE_MISSING_SSM_PARAMETERS=yes; \
-	else \
-		$(MAKE) ssm-parameters-check; \
 	fi
+	@$(MAKE) ssm-parameters-check
 
 argocd-install:
 	kubectl apply -f addons/argocd/namespace.yaml
@@ -107,7 +110,20 @@ argocd-install:
 	helm upgrade --install argocd argo/argo-cd --namespace argocd --create-namespace --version $(ARGOCD_CHART_VERSION) --values addons/argocd/values.yaml --wait --timeout 300s
 	kubectl wait --for condition=Established crd/applications.argoproj.io --timeout=120s
 
-argocd-apply: metrics-secret db-secret
+argocd-repo-secret:
+	kubectl apply -f addons/argocd/namespace.yaml
+	@set -e; \
+	token="$$(aws ssm get-parameter --region $(AWS_REGION) --name "$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" --with-decryption --query Parameter.Value --output text)"; \
+	kubectl -n argocd create secret generic woori-wallet-infra-repo \
+		--from-literal=type=git \
+		--from-literal=url="$(ARGOCD_INFRA_REPO_URL)" \
+		--from-literal=username=x-access-token \
+		--from-literal=password="$$token" \
+		--dry-run=client -o yaml | \
+		kubectl label --local -f - argocd.argoproj.io/secret-type=repository -o yaml | \
+		kubectl apply -f -
+
+argocd-apply: argocd-repo-secret metrics-secret db-secret
 	kubectl apply -f argocd/applications/apps.yaml
 
 metrics-secret:
@@ -166,7 +182,7 @@ monitoring-secret:
 
 secrets-apply: metrics-secret db-secret monitoring-secret
 
-monitoring-apply: metrics-secret monitoring-secret
+monitoring-apply: argocd-repo-secret metrics-secret monitoring-secret
 	kubectl apply -f argocd/applications/monitoring.yaml
 
 monitoring-wait: metrics-secret monitoring-secret monitoring-secrets-wait
@@ -293,6 +309,13 @@ confirm-data-delete:
 
 destroy:
 	terraform -chdir=$(TF_DIR) destroy
+
+stop-all:
+	$(MAKE) destroy SERVICE_MODE=edge-monitoring
+	$(MAKE) destroy SERVICE_MODE=edge-wallet
+	$(MAKE) destroy SERVICE_MODE=edge-woori
+	$(MAKE) workloads-delete
+	@echo "Stopped public edges and Kubernetes workloads. Platform resources and DB PVCs are retained."
 
 destroy-all:
 	$(MAKE) confirm-data-delete
