@@ -289,6 +289,7 @@ make apply-all
 gitops-guard
 images-verify
 SSM parameter check/bootstrap
+Argo CD infra repo token check
 Terraform platform apply
 kubeconfig update
 Argo CD install
@@ -327,7 +328,7 @@ make stop-all
 CONFIRM_DATA_DELETE=yes make destroy-all
 ```
 
-이 명령은 DB PVC를 삭제하므로 MySQL 데이터도 사라집니다. 데이터가 필요하면 먼저 백업/snapshot 절차를 수행해야 합니다.
+이 명령은 DB PVC를 삭제하므로 MySQL 데이터도 사라집니다. 데이터가 필요하면 먼저 백업/snapshot 절차를 수행해야 합니다. EKS가 아직 존재하는데 `kubectl` 접근이 안 되면 PVC 삭제를 건너뛰지 않고 실패시켜, EBS volume이 남는 상황을 막습니다.
 
 `destroy-all`은 project Terraform 리소스와 Kubernetes workload/PVC를 대상으로 합니다. AWS 계정의 default VPC/default subnet은 이 프로젝트가 만든 리소스가 아니므로 삭제하지 않습니다.
 

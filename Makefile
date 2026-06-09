@@ -309,8 +309,29 @@ deploy-apps:
 workloads-delete:
 	@set -e; \
 	if ! kubectl get --raw=/readyz >/dev/null 2>&1; then \
-		echo "Kubernetes API unavailable; skipping workload cleanup."; \
-		exit 0; \
+		cluster_name="$$(terraform -chdir=infra/platform output -raw cluster_name 2>/dev/null || true)"; \
+		if [ -z "$$cluster_name" ]; then \
+			echo "No platform cluster in Terraform state; skipping workload cleanup."; \
+			exit 0; \
+		fi; \
+		err_file="$$(mktemp)"; \
+		trap 'rm -f "$$err_file"' EXIT; \
+		if cluster_status="$$(aws eks describe-cluster --region $(AWS_REGION) --name "$$cluster_name" --query cluster.status --output text 2>"$$err_file")"; then \
+			if [ "$$cluster_status" = "DELETING" ]; then \
+				echo "EKS cluster $$cluster_name is deleting; skipping workload cleanup."; \
+				exit 0; \
+			fi; \
+			echo "Kubernetes API unavailable while EKS cluster $$cluster_name is $$cluster_status."; \
+			echo "Run make update-kubeconfig or fix kubectl access before workload cleanup."; \
+			exit 1; \
+		elif grep -q "ResourceNotFoundException" "$$err_file"; then \
+			echo "EKS cluster $$cluster_name no longer exists; skipping workload cleanup."; \
+			exit 0; \
+		else \
+			echo "Failed to check EKS cluster $$cluster_name before workload cleanup."; \
+			cat "$$err_file"; \
+			exit 1; \
+		fi; \
 	fi; \
 	if kubectl api-resources --api-group=argoproj.io --no-headers 2>/dev/null | awk '{print $$1}' | grep -qx applications; then \
 		for application in woori-wallet-monitoring woori-wallet-apps; do \
@@ -334,8 +355,29 @@ workloads-delete:
 data-delete: confirm-data-delete
 	@set -e; \
 	if ! kubectl get --raw=/readyz >/dev/null 2>&1; then \
-		echo "Kubernetes API unavailable; skipping PVC and namespace cleanup."; \
-		exit 0; \
+		cluster_name="$$(terraform -chdir=infra/platform output -raw cluster_name 2>/dev/null || true)"; \
+		if [ -z "$$cluster_name" ]; then \
+			echo "No platform cluster in Terraform state; skipping PVC and namespace cleanup."; \
+			exit 0; \
+		fi; \
+		err_file="$$(mktemp)"; \
+		trap 'rm -f "$$err_file"' EXIT; \
+		if cluster_status="$$(aws eks describe-cluster --region $(AWS_REGION) --name "$$cluster_name" --query cluster.status --output text 2>"$$err_file")"; then \
+			if [ "$$cluster_status" = "DELETING" ]; then \
+				echo "EKS cluster $$cluster_name is deleting; skipping PVC and namespace cleanup."; \
+				exit 0; \
+			fi; \
+			echo "Kubernetes API unavailable while EKS cluster $$cluster_name is $$cluster_status."; \
+			echo "Run make update-kubeconfig or fix kubectl access before PVC cleanup."; \
+			exit 1; \
+		elif grep -q "ResourceNotFoundException" "$$err_file"; then \
+			echo "EKS cluster $$cluster_name no longer exists; skipping PVC and namespace cleanup."; \
+			exit 0; \
+		else \
+			echo "Failed to check EKS cluster $$cluster_name before PVC cleanup."; \
+			cat "$$err_file"; \
+			exit 1; \
+		fi; \
 	fi; \
 	kubectl -n wallet delete pvc data-wallet-db-0 --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete pvc data-woori-db-0 --ignore-not-found=true --wait=true --timeout=300s; \
@@ -368,6 +410,7 @@ apply-all:
 	$(MAKE) gitops-guard
 	$(MAKE) images-verify
 	$(MAKE) ssm-parameters-ensure
+	$(MAKE) argocd-repo-token-check
 	$(MAKE) apply SERVICE_MODE=platform
 	$(MAKE) update-kubeconfig
 	$(MAKE) argocd-install
