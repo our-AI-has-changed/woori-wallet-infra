@@ -1,3 +1,4 @@
 resources:
+  - frontend.yaml
   - wallet.yaml
   - woori.yaml

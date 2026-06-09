@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/our-AI-has-changed/woori-wallet-infra.git
+    repoURL: __ARGOCD_INFRA_REPO_URL__
     targetRevision: main
     path: apps
   destination:

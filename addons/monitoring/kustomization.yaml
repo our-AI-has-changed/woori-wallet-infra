@@ -1,5 +1,6 @@
 resources:
   - namespace.yaml
+  - secrets/metrics-token.yaml
   - alerts/prometheus-rules.yaml
   - dashboards/wallet-woori-overview.yaml
   - servicemonitors/wallet-backend.yaml

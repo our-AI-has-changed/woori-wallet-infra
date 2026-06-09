@@ -1,0 +1,6 @@
+resources:
+  - wallet-backend-env.yaml
+  - woori-backend-env.yaml
+  - wallet-ai-env.yaml
+  - wallet-metrics-token.yaml
+  - woori-metrics-token.yaml

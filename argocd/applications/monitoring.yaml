@@ -15,10 +15,10 @@ spec:
         releaseName: kube-prometheus-stack
         valueFiles:
           - $values/addons/monitoring/values.yaml
-    - repoURL: https://github.com/our-AI-has-changed/woori-wallet-infra.git
+    - repoURL: __ARGOCD_INFRA_REPO_URL__
       targetRevision: main
       ref: values
-    - repoURL: https://github.com/our-AI-has-changed/woori-wallet-infra.git
+    - repoURL: __ARGOCD_INFRA_REPO_URL__
       targetRevision: main
       path: addons/monitoring
   destination:

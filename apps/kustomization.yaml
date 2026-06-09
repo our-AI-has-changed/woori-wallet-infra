@@ -1,6 +1,8 @@
 resources:
   - storage
   - namespaces
+  - external-secrets
+  - frontend
   - woori-db
   - wallet-db
   - woori-backend

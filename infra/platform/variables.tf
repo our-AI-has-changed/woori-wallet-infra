@@ -88,6 +88,12 @@ variable "enable_ebs_csi_driver" {
   default     = true
 }
 
+variable "external_secrets_kms_key_arns" {
+  description = "Customer-managed KMS key ARNs that External Secrets Operator may use for SecureString decryption. Leave empty when the SSM parameters use the AWS-managed aws/ssm key."
+  type        = list(string)
+  default     = []
+}
+
 variable "ebs_csi_driver_addon_version" {
   description = "Pinned EKS add-on version for the AWS EBS CSI driver. Must be compatible with cluster_version."
   type        = string

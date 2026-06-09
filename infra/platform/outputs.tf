@@ -58,3 +58,8 @@ output "node_group_autoscaling_group_names" {
   description = "Autoscaling group names backing the EKS managed node group."
   value       = [for group in aws_eks_node_group.this.resources[0].autoscaling_groups : group.name]
 }
+
+output "external_secrets_irsa_role_arn" {
+  description = "IAM role ARN used by the External Secrets Operator service account."
+  value       = try(aws_iam_role.external_secrets[0].arn, "")
+}

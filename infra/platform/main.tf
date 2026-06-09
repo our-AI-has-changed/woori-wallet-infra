@@ -2,10 +2,51 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
-  name_prefix  = var.name_prefix
-  cluster_name = "${local.name_prefix}-eks"
-  azs          = slice(data.aws_availability_zones.available.names, 0, 2)
+  name_prefix     = var.name_prefix
+  cluster_name    = "${local.name_prefix}-eks"
+  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
+  enable_eks_oidc = true
+  oidc_issuer     = aws_eks_cluster.this.identity[0].oidc[0].issuer
+  oidc_provider   = replace(local.oidc_issuer, "https://", "")
+
+  external_secrets_ssm_parameter_arns = [
+    "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/woori-wallet/prod/trial/*",
+    "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/woori-wallet/prod/metrics-token"
+  ]
+
+  external_secrets_iam_policy_statements = concat(
+    [
+      {
+        Sid    = "ReadRuntimeParameters"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ]
+        Resource = local.external_secrets_ssm_parameter_arns
+      }
+    ],
+    length(var.external_secrets_kms_key_arns) > 0 ? [
+      {
+        Sid    = "DecryptSecureStringParameters"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = var.external_secrets_kms_key_arns
+        Condition = {
+          StringEquals = {
+            "kms:CallerAccount" = data.aws_caller_identity.current.account_id
+            "kms:ViaService"    = "ssm.${var.aws_region}.amazonaws.com"
+          }
+        }
+      }
+    ] : []
+  )
 
   common_tags = merge(
     {
@@ -205,17 +246,17 @@ resource "aws_iam_role_policy_attachment" "ecr_read_only" {
 }
 
 data "tls_certificate" "eks_oidc" {
-  count = var.enable_ebs_csi_driver ? 1 : 0
+  count = local.enable_eks_oidc ? 1 : 0
 
-  url = aws_eks_cluster.this.identity[0].oidc[0].issuer
+  url = local.oidc_issuer
 }
 
 resource "aws_iam_openid_connect_provider" "eks" {
-  count = var.enable_ebs_csi_driver ? 1 : 0
+  count = local.enable_eks_oidc ? 1 : 0
 
   client_id_list  = ["sts.amazonaws.com"]
   thumbprint_list = [data.tls_certificate.eks_oidc[0].certificates[0].sha1_fingerprint]
-  url             = aws_eks_cluster.this.identity[0].oidc[0].issuer
+  url             = local.oidc_issuer
 
   tags = merge(local.common_tags, {
     Name = "${local.cluster_name}-oidc"
@@ -238,8 +279,8 @@ resource "aws_iam_role" "ebs_csi_driver" {
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {
           StringEquals = {
-            "${replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")}:aud" = "sts.amazonaws.com"
-            "${replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+            "${local.oidc_provider}:aud" = "sts.amazonaws.com"
+            "${local.oidc_provider}:sub" = "system:serviceaccount:kube-system:ebs-csi-controller-sa"
           }
         }
       }
@@ -254,6 +295,54 @@ resource "aws_iam_role_policy_attachment" "ebs_csi_driver" {
 
   role       = aws_iam_role.ebs_csi_driver[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+resource "aws_iam_role" "external_secrets" {
+  count = 1
+
+  name = "${local.cluster_name}-external-secrets-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks[0].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${local.oidc_provider}:aud" = "sts.amazonaws.com"
+            "${local.oidc_provider}:sub" = "system:serviceaccount:external-secrets:external-secrets"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_policy" "external_secrets_ssm" {
+  count = 1
+
+  name        = "${local.cluster_name}-external-secrets-ssm"
+  description = "Allow External Secrets Operator to read woori-wallet runtime secrets from SSM Parameter Store."
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.external_secrets_iam_policy_statements
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "external_secrets_ssm" {
+  count = 1
+
+  role       = aws_iam_role.external_secrets[0].name
+  policy_arn = aws_iam_policy.external_secrets_ssm[0].arn
 }
 
 resource "aws_eks_node_group" "this" {

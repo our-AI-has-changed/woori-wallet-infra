@@ -3,9 +3,16 @@ STACK_MODE ?= $(SERVICE_MODE)
 AWS_REGION ?= ap-northeast-2
 ECR_REGISTRY ?= 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com
 ARGOCD_CHART_VERSION ?= 7.8.27
+EXTERNAL_SECRETS_CHART_VERSION ?= 0.14.4
 GIT_BRANCH ?= main
 METRICS_TOKEN_PARAMETER ?= /woori-wallet/prod/metrics-token
-ARGOCD_INFRA_REPO_URL ?= https://github.com/our-AI-has-changed/woori-wallet-infra.git
+TRIAL_BACKEND_ENV_PARAMETER ?= /woori-wallet/prod/trial/backend-env
+TRIAL_AI_ENV_PARAMETER ?= /woori-wallet/prod/trial/ai-env
+TRIAL_APP_ENV_PARAMETER ?= /woori-wallet/prod/trial/app-env
+ARGOCD_INFRA_REPO_OWNER ?= our-AI-has-changed
+ARGOCD_INFRA_REPO_NAME ?= woori-wallet-infra
+ARGOCD_INFRA_REPO_URL ?= https://github.com/$(ARGOCD_INFRA_REPO_OWNER)/$(ARGOCD_INFRA_REPO_NAME).git
+ARGOCD_GITHUB_API_URL ?= https://api.github.com
 ARGOCD_INFRA_REPO_TOKEN_PARAMETER ?= /woori-wallet/prod/argocd-infra-repo-token
 WOORI_DB_PASSWORD_PARAMETER ?= /woori-wallet/prod/woori-db-password
 WOORI_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/woori-db-root-password
@@ -14,10 +21,10 @@ WALLET_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-root-password
 FORCE_GRAFANA_ADMIN_PASSWORD ?= no
 ENABLE_GRAFANA_EDGE ?= no
 CREATE_MISSING_SSM_PARAMETERS ?= no
-CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(STACK_MODE)))
+CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(if $(filter frontend,$(STACK_MODE)),edge-frontend,$(STACK_MODE))))
 TF_DIR := $(if $(filter state,$(CANONICAL_STACK)),bootstrap/state,infra/$(CANONICAL_STACK))
 
-.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply metrics-secret db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all output
+.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure external-secrets-install argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-render apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all output
 
 init:
 	terraform -chdir=$(TF_DIR) init -reconfigure
@@ -45,7 +52,7 @@ update-kubeconfig:
 
 images-verify:
 	@set -e; \
-	for manifest in apps/wallet-backend/deployment.yaml apps/woori-backend/deployment.yaml apps/wallet-ai/deployment.yaml apps/mock-mydata/deployment.yaml; do \
+	for manifest in apps/frontend/deployment.yaml apps/wallet-backend/deployment.yaml apps/woori-backend/deployment.yaml apps/wallet-ai/deployment.yaml apps/mock-mydata/deployment.yaml; do \
 		image=$$(awk '/ image: / { print $$2; exit }' "$$manifest"); \
 		repository=$${image%:*}; \
 		tag=$${image##*:}; \
@@ -60,7 +67,10 @@ ssm-parameters-check:
 	err_file="$$(mktemp)"; \
 	trap 'rm -f "$$err_file"' EXIT; \
 	for name in \
-		"$(METRICS_TOKEN_PARAMETER)" \
+			"$(METRICS_TOKEN_PARAMETER)" \
+			"$(TRIAL_APP_ENV_PARAMETER)" \
+			"$(TRIAL_BACKEND_ENV_PARAMETER)" \
+		"$(TRIAL_AI_ENV_PARAMETER)" \
 		"$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" \
 		"$(WOORI_DB_PASSWORD_PARAMETER)" \
 		"$(WOORI_DB_ROOT_PASSWORD_PARAMETER)" \
@@ -117,6 +127,28 @@ ssm-parameters-ensure:
 	fi
 	@$(MAKE) ssm-parameters-check
 
+external-secrets-install:
+	kubectl apply -f addons/external-secrets/namespace.yaml
+	helm repo add external-secrets https://charts.external-secrets.io --force-update
+	helm repo update
+	@set -e; \
+	role_arn="$$(terraform -chdir=infra/platform output -raw external_secrets_irsa_role_arn)"; \
+	if [ -z "$$role_arn" ]; then \
+		echo "external_secrets_irsa_role_arn is empty. Ensure infra/platform has been applied."; \
+		exit 1; \
+	fi; \
+	helm upgrade --install external-secrets external-secrets/external-secrets \
+		--namespace external-secrets \
+		--create-namespace \
+		--version $(EXTERNAL_SECRETS_CHART_VERSION) \
+		--values addons/external-secrets/values.yaml \
+		--set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$$role_arn" \
+		--wait \
+		--timeout 300s
+	kubectl wait --for condition=Established crd/externalsecrets.external-secrets.io --timeout=120s
+	kubectl wait --for condition=Established crd/clustersecretstores.external-secrets.io --timeout=120s
+	kubectl apply -f addons/external-secrets/cluster-secret-store.yaml
+
 argocd-install:
 	kubectl apply -f addons/argocd/namespace.yaml
 	helm repo add argo https://argoproj.github.io/argo-helm --force-update
@@ -126,12 +158,53 @@ argocd-install:
 
 argocd-repo-token-check:
 	@set -e; \
+	repo_path="$(ARGOCD_INFRA_REPO_OWNER)/$(ARGOCD_INFRA_REPO_NAME)"; \
+	repo_url="$(ARGOCD_INFRA_REPO_URL)"; \
+	case "$$repo_url" in \
+		https://*/*) ;; \
+		*) \
+			echo "ARGOCD_INFRA_REPO_URL must be an HTTPS Git URL because argocd-repo-secret uses token/password authentication."; \
+			echo "SSH repo URLs require a different Argo CD Secret with sshPrivateKey and are not supported by this Makefile."; \
+			exit 1; \
+			;; \
+	esac; \
+	repo_host="$$(printf '%s\n' "$$repo_url" | sed -E 's#^https://([^/]+)/.*#\1#')"; \
+	url_repo_path="$$(printf '%s\n' "$$repo_url" | sed -E 's#^https://[^/]+/##; s#\.git$$##; s#/*$$##')"; \
+	if [ "$$url_repo_path" != "$$repo_path" ]; then \
+		echo "ARGOCD_INFRA_REPO_URL points to $$url_repo_path, but token preflight checks $$repo_path."; \
+		echo "Set ARGOCD_INFRA_REPO_OWNER, ARGOCD_INFRA_REPO_NAME, and ARGOCD_INFRA_REPO_URL to the same repo."; \
+		exit 1; \
+	fi; \
+	api_url="$(ARGOCD_GITHUB_API_URL)"; \
+	case "$$api_url" in \
+		https://*) ;; \
+		*) echo "ARGOCD_GITHUB_API_URL must be an HTTPS URL."; exit 1 ;; \
+	esac; \
+	api_host="$$(printf '%s\n' "$$api_url" | sed -E 's#^https://([^/]+).*#\1#')"; \
+	if [ "$$repo_host" = "github.com" ] && [ "$$api_host" != "api.github.com" ]; then \
+		echo "github.com repos must use ARGOCD_GITHUB_API_URL=https://api.github.com."; \
+		exit 1; \
+	fi; \
+	if [ "$$repo_host" != "github.com" ] && [ "$$api_url" = "https://api.github.com" ]; then \
+		echo "GitHub Enterprise repo host $$repo_host requires ARGOCD_GITHUB_API_URL, for example https://$$repo_host/api/v3."; \
+		exit 1; \
+	fi; \
+	if [ "$$repo_host" != "github.com" ] && [ "$$api_host" != "$$repo_host" ]; then \
+		echo "GitHub Enterprise API host $$api_host must match repo host $$repo_host."; \
+		exit 1; \
+	fi; \
 	token="$$(aws ssm get-parameter --region $(AWS_REGION) --name "$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" --with-decryption --query Parameter.Value --output text)"; \
-	repo_path="$$(printf '%s\n' "$(ARGOCD_INFRA_REPO_URL)" | sed -E 's#^https://github.com/##; s#\.git$$##')"; \
+	err_file="$$(mktemp)"; \
+	trap 'rm -f "$$err_file"' EXIT; \
 	status="$$(curl -sS -o /dev/null -w '%{http_code}' \
 		-H "Authorization: Bearer $$token" \
 		-H "Accept: application/vnd.github+json" \
-		"https://api.github.com/repos/$$repo_path")"; \
+		"$${api_url%/}/repos/$$repo_path" 2>"$$err_file" || true)"; \
+	if [ "$$status" = "000" ]; then \
+		echo "GitHub API unreachable while checking $$repo_path."; \
+		cat "$$err_file"; \
+		exit 1; \
+	fi; \
 	if [ "$$status" != "200" ]; then \
 		echo "Argo CD infra repo token cannot read $$repo_path. GitHub API status: $$status"; \
 		echo "Update $(ARGOCD_INFRA_REPO_TOKEN_PARAMETER) with a token that has contents:read access."; \
@@ -152,21 +225,17 @@ argocd-repo-secret: argocd-repo-token-check
 		kubectl label --local -f - argocd.argoproj.io/secret-type=repository -o yaml | \
 		kubectl apply -f -
 
-argocd-apply: argocd-repo-secret metrics-secret db-secret
-	kubectl apply -f argocd/applications/apps.yaml
-
-metrics-secret:
-	kubectl apply -f apps/namespaces/wallet.yaml
-	kubectl apply -f apps/namespaces/woori.yaml
-	kubectl apply -f addons/monitoring/namespace.yaml
+argocd-apply: argocd-repo-secret db-secret
 	@set -e; \
-	token="$$(aws ssm get-parameter --region $(AWS_REGION) --name "$(METRICS_TOKEN_PARAMETER)" --with-decryption --query Parameter.Value --output text)"; \
-	secret_file="$$(mktemp)"; \
-	trap 'rm -f "$$secret_file"' EXIT; \
-	printf 'METRICS_TOKEN=%s\n' "$$token" > "$$secret_file"; \
-	for namespace in wallet woori monitoring; do \
-		kubectl -n "$$namespace" create secret generic metrics-token --from-env-file="$$secret_file" --dry-run=client -o yaml | kubectl apply -f -; \
-	done
+	rendered="$$(mktemp)"; \
+	trap 'rm -f "$$rendered"' EXIT; \
+	ARGOCD_RENDER_REPO_URL="$(ARGOCD_INFRA_REPO_URL)" perl -pe 's#__ARGOCD_INFRA_REPO_URL__#$$ENV{ARGOCD_RENDER_REPO_URL}#g' argocd/applications/apps.yaml > "$$rendered"; \
+	repo_count="$$(grep -F "repoURL: $(ARGOCD_INFRA_REPO_URL)" "$$rendered" | wc -l | tr -d ' ')"; \
+	if grep -q "__ARGOCD_INFRA_REPO_URL__" "$$rendered" || [ "$$repo_count" -ne 1 ]; then \
+		echo "Failed to render argocd/applications/apps.yaml with ARGOCD_INFRA_REPO_URL=$(ARGOCD_INFRA_REPO_URL)."; \
+		exit 1; \
+	fi; \
+	kubectl apply -f "$$rendered"
 
 db-secret:
 	kubectl apply -f apps/namespaces/wallet.yaml
@@ -209,12 +278,21 @@ monitoring-secret:
 		kubectl -n monitoring create secret generic grafana-admin --from-env-file="$$secret_file" --dry-run=client -o yaml | kubectl apply -f -; \
 	fi
 
-secrets-apply: metrics-secret db-secret monitoring-secret
+secrets-apply: db-secret monitoring-secret
 
-monitoring-apply: argocd-repo-secret metrics-secret monitoring-secret
-	kubectl apply -f argocd/applications/monitoring.yaml
+monitoring-apply: argocd-repo-secret monitoring-secret
+	@set -e; \
+	rendered="$$(mktemp)"; \
+	trap 'rm -f "$$rendered"' EXIT; \
+	ARGOCD_RENDER_REPO_URL="$(ARGOCD_INFRA_REPO_URL)" perl -pe 's#__ARGOCD_INFRA_REPO_URL__#$$ENV{ARGOCD_RENDER_REPO_URL}#g' argocd/applications/monitoring.yaml > "$$rendered"; \
+	repo_count="$$(grep -F "repoURL: $(ARGOCD_INFRA_REPO_URL)" "$$rendered" | wc -l | tr -d ' ')"; \
+	if grep -q "__ARGOCD_INFRA_REPO_URL__" "$$rendered" || [ "$$repo_count" -ne 2 ]; then \
+		echo "Failed to render argocd/applications/monitoring.yaml with ARGOCD_INFRA_REPO_URL=$(ARGOCD_INFRA_REPO_URL)."; \
+		exit 1; \
+	fi; \
+	kubectl apply -f "$$rendered"
 
-monitoring-wait: metrics-secret monitoring-secret monitoring-secrets-wait
+monitoring-wait: monitoring-secret monitoring-secrets-wait
 	@set -e; deadline=$$(( $$(date +%s) + 600 )); \
 	for resource in \
 		"namespace/monitoring" \
@@ -231,18 +309,21 @@ monitoring-wait: metrics-secret monitoring-secret monitoring-secrets-wait
 app-secrets-wait:
 	@set -e; deadline=$$(( $$(date +%s) + 600 )); \
 	for secret_key in \
+		"wallet backend-env .env" \
+		"wallet ai-env .env" \
 		"wallet metrics-token METRICS_TOKEN" \
 		"wallet wallet-db-credentials MYSQL_PASSWORD" \
 		"wallet wallet-db-credentials MYSQL_ROOT_PASSWORD" \
 		"wallet wallet-db-credentials WALLET_DATABASE_URL" \
 		"wallet woori-db-credentials WOORI_DATABASE_URL" \
+		"woori backend-env .env" \
 		"woori metrics-token METRICS_TOKEN" \
 		"woori woori-db-credentials MYSQL_PASSWORD" \
 		"woori woori-db-credentials MYSQL_ROOT_PASSWORD" \
 		"woori woori-db-credentials WOORI_DATABASE_URL"; do \
 		set -- $$secret_key; namespace=$$1; secret=$$2; key=$$3; \
 		echo "Waiting for secret $$namespace/$$secret key $$key"; \
-		until [ -n "$$(kubectl -n "$$namespace" get secret "$$secret" -o jsonpath="{.data.$$key}" 2>/dev/null)" ]; do \
+		until [ -n "$$(kubectl -n "$$namespace" get secret "$$secret" -o go-template="{{ index .data \"$$key\" }}" 2>/dev/null)" ]; do \
 			if [ $$(date +%s) -ge $$deadline ]; then echo "Timed out waiting for secret $$namespace/$$secret key $$key"; exit 1; fi; \
 			sleep 5; \
 		done; \
@@ -256,7 +337,7 @@ monitoring-secrets-wait:
 		"monitoring grafana-admin admin-password"; do \
 		set -- $$secret_key; namespace=$$1; secret=$$2; key=$$3; \
 		echo "Waiting for secret $$namespace/$$secret key $$key"; \
-		until [ -n "$$(kubectl -n "$$namespace" get secret "$$secret" -o jsonpath="{.data.$$key}" 2>/dev/null)" ]; do \
+		until [ -n "$$(kubectl -n "$$namespace" get secret "$$secret" -o go-template="{{ index .data \"$$key\" }}" 2>/dev/null)" ]; do \
 			if [ $$(date +%s) -ge $$deadline ]; then echo "Timed out waiting for secret $$namespace/$$secret key $$key"; exit 1; fi; \
 			sleep 5; \
 		done; \
@@ -271,14 +352,17 @@ apps-wait: app-secrets-wait
 	for resource in \
 		"namespace/wallet" \
 		"namespace/woori" \
+		"namespace/frontend" \
 		"service/wallet-db -n wallet" \
 		"service/woori-db -n woori" \
 		"statefulset/wallet-db -n wallet" \
 		"statefulset/woori-db -n woori" \
 		"service/wallet-backend -n wallet" \
 		"service/woori-backend -n woori" \
+		"service/frontend -n frontend" \
 		"deployment/wallet-backend -n wallet" \
 		"deployment/woori-backend -n woori" \
+		"deployment/frontend -n frontend" \
 		"deployment/wallet-ai -n wallet" \
 		"deployment/mock-mydata -n wallet"; do \
 		echo "Waiting for $$resource"; \
@@ -291,13 +375,17 @@ apps-wait: app-secrets-wait
 	kubectl -n woori rollout status statefulset/woori-db --timeout=300s
 	kubectl -n wallet wait --for=condition=Available deployment/wallet-backend --timeout=300s
 	kubectl -n woori wait --for=condition=Available deployment/woori-backend --timeout=300s
+	kubectl -n frontend wait --for=condition=Available deployment/frontend --timeout=300s
 	kubectl -n wallet wait --for=condition=Available deployment/wallet-ai --timeout=300s
 	kubectl -n wallet wait --for=condition=Available deployment/mock-mydata --timeout=300s
+
+apps-render:
+	kubectl kustomize apps
 
 apps-dry-run:
 	kubectl apply -k apps --dry-run=client
 
-apps-apply: metrics-secret db-secret
+apps-apply: db-secret
 	kubectl apply -k apps
 
 argocd-apps-apply:
@@ -346,11 +434,13 @@ workloads-delete:
 	fi; \
 	kubectl -n wallet delete deployment wallet-backend wallet-ai mock-mydata --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete deployment woori-backend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n frontend delete deployment frontend --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete statefulset wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete statefulset woori-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete service wallet-backend wallet-ai mock-mydata wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete service woori-backend woori-db --ignore-not-found=true --wait=true --timeout=300s; \
-	kubectl delete namespace monitoring argocd --ignore-not-found=true --wait=true --timeout=300s
+	kubectl -n frontend delete service frontend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl delete namespace monitoring argocd frontend --ignore-not-found=true --wait=true --timeout=300s
 
 data-delete: confirm-data-delete
 	@set -e; \
@@ -364,8 +454,9 @@ data-delete: confirm-data-delete
 		trap 'rm -f "$$err_file"' EXIT; \
 		if cluster_status="$$(aws eks describe-cluster --region $(AWS_REGION) --name "$$cluster_name" --query cluster.status --output text 2>"$$err_file")"; then \
 			if [ "$$cluster_status" = "DELETING" ]; then \
-				echo "EKS cluster $$cluster_name is deleting; skipping PVC and namespace cleanup."; \
-				exit 0; \
+				echo "EKS cluster $$cluster_name is deleting, so PVC cleanup cannot be verified."; \
+				echo "Check for leftover EBS volumes before considering destroy complete."; \
+				exit 1; \
 			fi; \
 			echo "Kubernetes API unavailable while EKS cluster $$cluster_name is $$cluster_status."; \
 			echo "Run make update-kubeconfig or fix kubectl access before PVC cleanup."; \
@@ -392,6 +483,7 @@ destroy:
 
 stop-all:
 	$(MAKE) destroy SERVICE_MODE=edge-monitoring
+	$(MAKE) destroy SERVICE_MODE=edge-frontend
 	$(MAKE) destroy SERVICE_MODE=edge-wallet
 	$(MAKE) destroy SERVICE_MODE=edge-woori
 	$(MAKE) workloads-delete
@@ -400,6 +492,7 @@ stop-all:
 destroy-all:
 	$(MAKE) confirm-data-delete
 	$(MAKE) destroy SERVICE_MODE=edge-monitoring
+	$(MAKE) destroy SERVICE_MODE=edge-frontend
 	$(MAKE) destroy SERVICE_MODE=edge-wallet
 	$(MAKE) destroy SERVICE_MODE=edge-woori
 	$(MAKE) workloads-delete
@@ -413,10 +506,12 @@ apply-all:
 	$(MAKE) argocd-repo-token-check
 	$(MAKE) apply SERVICE_MODE=platform
 	$(MAKE) update-kubeconfig
+	$(MAKE) external-secrets-install
 	$(MAKE) argocd-install
 	$(MAKE) addons-apply
 	$(MAKE) monitoring-wait
 	$(MAKE) apps-wait
+	$(MAKE) apply SERVICE_MODE=edge-frontend
 	$(MAKE) apply SERVICE_MODE=edge-woori
 	$(MAKE) apply SERVICE_MODE=edge-wallet
 	@if [ "$(ENABLE_GRAFANA_EDGE)" = "yes" ]; then \

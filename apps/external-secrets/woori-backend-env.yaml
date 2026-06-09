@@ -1,0 +1,23 @@
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: backend-env
+  namespace: woori
+  annotations:
+    argocd.argoproj.io/sync-wave: "-4"
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: woori-wallet-ssm
+    kind: ClusterSecretStore
+  target:
+    name: backend-env
+    creationPolicy: Owner
+    template:
+      type: Opaque
+      data:
+        .env: "{{ .backendEnv }}"
+  data:
+    - secretKey: backendEnv
+      remoteRef:
+        key: /woori-wallet/prod/trial/backend-env

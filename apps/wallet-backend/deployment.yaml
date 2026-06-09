@@ -25,8 +25,8 @@ spec:
             - name: http
               containerPort: 8000
           env:
-            - name: CORS_ORIGINS
-              value: "*"
+            - name: SERVICE_MODE
+              value: wallet
             - name: WOORI_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -48,6 +48,11 @@ spec:
                 secretKeyRef:
                   name: metrics-token
                   key: METRICS_TOKEN
+          volumeMounts:
+            - name: backend-env
+              mountPath: /service/.env
+              subPath: .env
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /api/health
@@ -67,3 +72,10 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+      volumes:
+        - name: backend-env
+          secret:
+            secretName: backend-env
+            items:
+              - key: .env
+                path: .env

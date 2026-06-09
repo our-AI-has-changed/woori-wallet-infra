@@ -16,6 +16,10 @@ node_instance_types = ["t3.small"]
 enable_ebs_csi_driver       = true
 ebs_csi_driver_addon_version = "v1.61.1-eksbuild.1"
 
+# Leave empty when SSM SecureString parameters use the AWS-managed aws/ssm key.
+# Add only the customer-managed KMS key ARNs used by the runtime SSM parameters.
+external_secrets_kms_key_arns = []
+
 shared_alb_name          = "woori-wallet-prd-api-alb"
 shared_alb_node_port_min = 30080
 shared_alb_node_port_max = 30089

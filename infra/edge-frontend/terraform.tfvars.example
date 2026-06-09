@@ -1,0 +1,23 @@
+aws_region  = "ap-northeast-2"
+project     = "woori-wallet"
+service     = "frontend"
+environment = "prd"
+name_prefix = "woori-wallet-prd"
+
+state_bucket_name = "woori-wallet-tfstate-655700895912-apne2"
+
+node_port                  = 30083
+target_group_name          = "frontend-prd-tg"
+alb_host_header            = "frontend.internal"
+alb_listener_rule_priority = 130
+blocked_paths              = []
+health_check_path          = "/"
+health_check_matcher       = "200-399"
+
+api_throttling_burst_limit = 200
+api_throttling_rate_limit  = 100
+
+# custom_domain_name = "app.dannis.cloud"
+# route53_zone_name  = "dannis.cloud"
+
+tags = {}
