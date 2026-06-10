@@ -17,8 +17,8 @@ health_check_matcher       = "200-399"
 api_throttling_burst_limit = 100
 api_throttling_rate_limit  = 50
 
-# custom_domain_name = "wallet-api.example.com"
-# route53_zone_name  = "example.com"
+custom_domain_name = "wallet-api.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 # jwt_issuer   = "https://issuer.example.com"
 # jwt_audience = ["wallet-api"]
 

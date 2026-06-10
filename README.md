@@ -34,6 +34,7 @@ EKS
 ├── bootstrap/state              # Terraform remote state S3 bucket bootstrap
 ├── infra
 │   ├── platform                 # VPC, EKS, node group, EBS CSI, shared internal ALB, VPC Link
+│   ├── dns                      # Route53 public hosted zone for dannis.cloud
 │   ├── edge-frontend            # frontend API Gateway, ALB rule, target group
 │   ├── edge-woori               # woori API Gateway, ALB rule, target group
 │   ├── edge-wallet              # wallet API Gateway, ALB rule, target group
@@ -54,6 +55,7 @@ EKS
 | --- | --- |
 | `STACK_MODE=state` | Terraform state용 S3 bucket bootstrap |
 | `SERVICE_MODE=platform` | VPC, public/private subnet, NAT Gateway 1개, EKS, node group, EBS CSI, shared internal ALB, API Gateway VPC Link |
+| `SERVICE_MODE=dns` | Route53 public hosted zone for `dannis.cloud` |
 | `SERVICE_MODE=edge-frontend` | frontend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
 | `SERVICE_MODE=edge-woori` | woori-backend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
 | `SERVICE_MODE=edge-wallet` | wallet-backend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
@@ -331,6 +333,7 @@ make apply STACK_MODE=state
 
 ```sh
 make init SERVICE_MODE=platform
+make init SERVICE_MODE=dns
 make init SERVICE_MODE=edge-frontend
 make init SERVICE_MODE=edge-woori
 make init SERVICE_MODE=edge-wallet
@@ -343,6 +346,9 @@ make apply-all
 ```text
 gitops-guard
 images-verify
+Terraform dns apply
+Route53 hosted zone check
+Route53 public NS delegation check
 SSM parameter check/bootstrap
 Argo CD infra repo token check
 Terraform platform apply
@@ -368,7 +374,22 @@ make output SERVICE_MODE=edge-woori
 make output SERVICE_MODE=edge-monitoring
 ```
 
-`platform`까지 destroy 후 다시 apply하면 API Gateway 기본 URL은 바뀔 수 있습니다. 고정 URL이 필요하면 Route53 custom domain을 사용합니다.
+`platform`까지 destroy 후 다시 apply하면 API Gateway 기본 URL은 바뀔 수 있습니다. 이 repo는 Route53 custom domain을 기본값으로 사용해서 아래 고정 URL을 만듭니다.
+
+| 서비스 | 고정 URL |
+| --- | --- |
+| frontend | `https://frontend.dannis.cloud` |
+| woori-backend | `https://woori-api.dannis.cloud` |
+| wallet-backend | `https://wallet-api.dannis.cloud` |
+| Grafana, 선택 적용 | `https://grafana.dannis.cloud` |
+
+`dns` Terraform 스택은 `dannis.cloud` public Route53 hosted zone을 생성합니다. 이 스택은 최초 1회 apply 후 계속 유지하는 장기 기반 리소스입니다. 각 edge Terraform 스택은 `dns` remote state의 hosted zone ID를 사용해 ACM certificate, DNS validation record, API Gateway custom domain, API mapping, Route53 A alias record를 생성합니다.
+
+외부 도메인 구매처에서 `dannis.cloud`를 샀다면, `make output SERVICE_MODE=dns`에 나오는 Route53 name server 4개를 구매처 DNS 설정에 위임해야 합니다. 외부 도메인 구매처에는 A record가 아니라 Route53 name server 4개를 등록합니다. 위임 전에는 ACM certificate 검증이 완료되지 않아 edge apply가 오래 기다리다 실패할 수 있습니다.
+
+Route53 hosted zone을 삭제했다가 다시 만들면 name server 4개가 바뀔 수 있습니다. 그러면 도메인 구매처에 NS를 다시 등록해야 하므로, 비용 절감용 종료 절차에서는 `dns` 스택을 내리지 않습니다.
+
+`edge-frontend`, `edge-woori`, `edge-wallet`, `edge-monitoring`을 개별 apply할 때도 Route53 hosted zone과 public NS 위임을 먼저 검사합니다. `dig`가 없는 환경에서는 이 검사를 통과시키지 않습니다. custom domain을 일부러 끈 임시 edge apply만 필요하면 `EDGE_CUSTOM_DOMAIN_ENABLED=no make apply SERVICE_MODE=edge-wallet`처럼 preflight를 끌 수 있습니다.
 
 ## 서버 중지와 전체 종료
 
@@ -388,7 +409,15 @@ CONFIRM_DATA_DELETE=yes make destroy-all
 
 이 명령은 DB PVC를 삭제하므로 MySQL 데이터도 사라집니다. 데이터가 필요하면 먼저 백업/snapshot 절차를 수행해야 합니다. EKS가 아직 존재하거나 삭제 중인데 `kubectl` 접근이 안 되면 PVC 삭제를 완료로 보지 않고 실패시켜, EBS volume이 남는 상황을 놓치지 않게 합니다.
 
-`destroy-all`은 project Terraform 리소스와 Kubernetes workload/PVC를 대상으로 합니다. AWS 계정의 default VPC/default subnet은 이 프로젝트가 만든 리소스가 아니므로 삭제하지 않습니다.
+`destroy-all`은 project Terraform 리소스와 Kubernetes workload/PVC를 대상으로 합니다. edge, workload/PVC, platform까지만 삭제하고 `dns` 스택의 Route53 hosted zone은 유지합니다. 고정 도메인의 name server가 바뀌지 않게 하기 위해서입니다. AWS 계정의 default VPC/default subnet은 이 프로젝트가 만든 리소스가 아니므로 삭제하지 않습니다.
+
+정말 DNS hosted zone까지 삭제해야 할 때만 별도 타깃을 사용합니다.
+
+```sh
+CONFIRM_DNS_DELETE=yes make destroy-dns
+```
+
+이 명령은 비용 절감용 종료 절차가 아닙니다. hosted zone을 지우면 나중에 다시 apply했을 때 Route53 name server가 바뀔 수 있고, 도메인 구매처에 NS 4개를 다시 등록해야 할 수 있습니다.
 
 ## Terraform state
 

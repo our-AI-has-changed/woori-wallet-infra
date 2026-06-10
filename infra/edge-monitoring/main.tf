@@ -1,5 +1,6 @@
 locals {
-  name_prefix = var.name_prefix
+  name_prefix           = var.name_prefix
+  custom_domain_enabled = var.custom_domain_name != null && var.route53_zone_name != null
 
   common_tags = merge(
     {
@@ -35,5 +36,6 @@ module "edge" {
   jwt_audience                       = var.jwt_audience
   custom_domain_name                 = var.custom_domain_name
   route53_zone_name                  = var.route53_zone_name
+  route53_zone_id                    = local.custom_domain_enabled ? data.terraform_remote_state.dns[0].outputs.zone_id : null
   allowed_source_cidrs               = var.admin_allowed_cidrs
 }

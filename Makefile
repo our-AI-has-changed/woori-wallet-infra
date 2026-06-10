@@ -21,10 +21,12 @@ WALLET_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-root-password
 FORCE_GRAFANA_ADMIN_PASSWORD ?= no
 ENABLE_GRAFANA_EDGE ?= no
 CREATE_MISSING_SSM_PARAMETERS ?= no
+ROUTE53_ZONE_NAME ?= dannis.cloud
+EDGE_CUSTOM_DOMAIN_ENABLED ?= yes
 CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(if $(filter frontend,$(STACK_MODE)),edge-frontend,$(STACK_MODE))))
 TF_DIR := $(if $(filter state,$(CANONICAL_STACK)),bootstrap/state,infra/$(CANONICAL_STACK))
 
-.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure external-secrets-install argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-render apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all output
+.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify route53-zone-check route53-delegation-check ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure external-secrets-install argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-render apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all destroy-dns output
 
 init:
 	terraform -chdir=$(TF_DIR) init -reconfigure
@@ -39,6 +41,10 @@ plan:
 	terraform -chdir=$(TF_DIR) plan
 
 apply:
+	@if { [ "$(CANONICAL_STACK)" = "edge-frontend" ] || [ "$(CANONICAL_STACK)" = "edge-woori" ] || [ "$(CANONICAL_STACK)" = "edge-wallet" ] || [ "$(CANONICAL_STACK)" = "edge-monitoring" ]; } && [ "$(EDGE_CUSTOM_DOMAIN_ENABLED)" = "yes" ]; then \
+		$(MAKE) route53-zone-check; \
+		$(MAKE) route53-delegation-check; \
+	fi
 	terraform -chdir=$(TF_DIR) apply
 
 gitops-guard:
@@ -60,6 +66,56 @@ images-verify:
 		echo "Checking ECR image $$repository_name:$$tag"; \
 		aws ecr describe-images --region $(AWS_REGION) --repository-name "$$repository_name" --image-ids imageTag="$$tag" --output json >/dev/null; \
 	done
+
+route53-zone-check:
+	@set -e; \
+	zone_id="$$(terraform -chdir=infra/dns output -raw zone_id 2>/dev/null || true)"; \
+	zone_name="$$(terraform -chdir=infra/dns output -raw zone_name 2>/dev/null || true)"; \
+	if [ -z "$$zone_id" ] || [ "$$zone_id" = "None" ]; then \
+		echo "Missing Route53 DNS Terraform state. Run make apply SERVICE_MODE=dns before applying edge resources."; \
+		exit 1; \
+	fi; \
+	if [ "$$zone_name" != "$(ROUTE53_ZONE_NAME)" ]; then \
+		echo "DNS Terraform state zone_name is $$zone_name, expected $(ROUTE53_ZONE_NAME)."; \
+		exit 1; \
+	fi; \
+	echo "Route53 hosted zone exists: $$zone_name ($$zone_id)"; \
+	echo "Route53 name servers:"; \
+	aws route53 get-hosted-zone --id "$$zone_id" --query 'DelegationSet.NameServers' --output text
+
+route53-delegation-check:
+	@set -e; \
+	if ! command -v dig >/dev/null 2>&1; then \
+		echo "dig is required for Route53 public NS delegation check."; \
+		echo "Install bind tools or run this check from an environment with dig before applying edge resources."; \
+		exit 1; \
+	fi; \
+	zone_id="$$(terraform -chdir=infra/dns output -raw zone_id 2>/dev/null || true)"; \
+	zone_name="$$(terraform -chdir=infra/dns output -raw zone_name 2>/dev/null || true)"; \
+	if [ -z "$$zone_id" ] || [ "$$zone_id" = "None" ]; then \
+		echo "Missing Route53 DNS Terraform state. Run make apply SERVICE_MODE=dns before applying edge resources."; \
+		exit 1; \
+	fi; \
+	if [ "$$zone_name" != "$(ROUTE53_ZONE_NAME)" ]; then \
+		echo "DNS Terraform state zone_name is $$zone_name, expected $(ROUTE53_ZONE_NAME)."; \
+		exit 1; \
+	fi; \
+	route53_ns="$$(aws route53 get-hosted-zone --id "$$zone_id" --query 'DelegationSet.NameServers' --output text | tr '\t' '\n' | sed 's/\.$$//' | sort | tr '\n' ' ' | sed 's/ $$//')"; \
+	public_ns="$$(dig +short NS "$$zone_name" | sed 's/\.$$//' | sort | tr '\n' ' ' | sed 's/ $$//')"; \
+	if [ -z "$$public_ns" ]; then \
+		echo "No public NS records found for $$zone_name."; \
+		echo "Delegate the domain to these Route53 name servers before apply-all continues:"; \
+		echo "$$route53_ns"; \
+		exit 1; \
+	fi; \
+	if [ "$$route53_ns" != "$$public_ns" ]; then \
+		echo "Public NS records for $$zone_name do not match the Route53 hosted zone."; \
+		echo "Route53 name servers: $$route53_ns"; \
+		echo "Public DNS name servers: $$public_ns"; \
+		echo "Update the domain registrar NS records before applying platform/edge resources."; \
+		exit 1; \
+	fi; \
+	echo "Route53 public NS delegation is configured for $$zone_name."
 
 ssm-parameters-check:
 	@set -e; \
@@ -479,6 +535,10 @@ confirm-data-delete:
 	@test "$(CONFIRM_DATA_DELETE)" = "yes" || { echo "DB PVC deletion is required before platform destroy. Re-run with CONFIRM_DATA_DELETE=yes only after backup/data loss is accepted."; exit 1; }
 
 destroy:
+	@if [ "$(CANONICAL_STACK)" = "dns" ] && [ "$(CONFIRM_DNS_DELETE)" != "yes" ]; then \
+		echo "Route53 DNS hosted zone is a long-lived base resource. Use CONFIRM_DNS_DELETE=yes make destroy-dns if NS changes are accepted."; \
+		exit 1; \
+	fi
 	terraform -chdir=$(TF_DIR) destroy
 
 stop-all:
@@ -498,10 +558,18 @@ destroy-all:
 	$(MAKE) workloads-delete
 	$(MAKE) data-delete CONFIRM_DATA_DELETE=yes
 	$(MAKE) destroy SERVICE_MODE=platform
+	@echo "Keeping Route53 DNS stack. Use CONFIRM_DNS_DELETE=yes make destroy-dns only when the hosted zone must be deleted."
+
+destroy-dns:
+	@test "$(CONFIRM_DNS_DELETE)" = "yes" || { echo "Route53 DNS hosted zone is a long-lived base resource. Re-run with CONFIRM_DNS_DELETE=yes only if NS changes are accepted."; exit 1; }
+	$(MAKE) destroy SERVICE_MODE=dns CONFIRM_DNS_DELETE=yes
 
 apply-all:
 	$(MAKE) gitops-guard
 	$(MAKE) images-verify
+	$(MAKE) apply SERVICE_MODE=dns
+	$(MAKE) route53-zone-check
+	$(MAKE) route53-delegation-check
 	$(MAKE) ssm-parameters-ensure
 	$(MAKE) argocd-repo-token-check
 	$(MAKE) apply SERVICE_MODE=platform

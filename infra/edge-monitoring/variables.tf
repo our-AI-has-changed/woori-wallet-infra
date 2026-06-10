@@ -113,13 +113,13 @@ variable "jwt_audience" {
 }
 
 variable "custom_domain_name" {
-  description = "Optional custom domain name for Grafana, for example grafana.example.com."
+  description = "Custom domain name for Grafana."
   type        = string
-  default     = null
+  default     = "grafana.dannis.cloud"
 }
 
 variable "route53_zone_name" {
-  description = "Optional public Route53 hosted zone name used to validate and point the custom domain, for example example.com."
+  description = "Public Route53 hosted zone name used to validate and point the custom domain."
   type        = string
-  default     = null
+  default     = "dannis.cloud"
 }

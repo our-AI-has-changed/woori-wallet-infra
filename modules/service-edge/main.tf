@@ -1,5 +1,6 @@
 locals {
-  custom_domain_enabled  = var.custom_domain_name != null && var.route53_zone_name != null
+  custom_domain_enabled  = var.custom_domain_name != null && (var.route53_zone_id != null || var.route53_zone_name != null)
+  custom_domain_zone_id  = local.custom_domain_enabled ? (var.route53_zone_id != null ? var.route53_zone_id : data.aws_route53_zone.custom_domain[0].zone_id) : null
   jwt_authorizer_enabled = var.jwt_issuer != null && length(var.jwt_audience) > 0
   waf_enabled            = length(var.allowed_source_cidrs) > 0
   waf_metric_prefix      = replace("${var.name_prefix}-${var.service}", "-", "_")
@@ -41,7 +42,7 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
 }
 
 data "aws_route53_zone" "custom_domain" {
-  count = local.custom_domain_enabled ? 1 : 0
+  count = local.custom_domain_enabled && var.route53_zone_id == null ? 1 : 0
 
   name         = trimsuffix(var.route53_zone_name, ".")
   private_zone = false
@@ -74,7 +75,7 @@ resource "aws_route53_record" "custom_domain_validation" {
   records         = [each.value.record]
   ttl             = 60
   type            = each.value.type
-  zone_id         = data.aws_route53_zone.custom_domain[0].zone_id
+  zone_id         = local.custom_domain_zone_id
 }
 
 resource "aws_acm_certificate_validation" "custom_domain" {
@@ -111,7 +112,7 @@ resource "aws_route53_record" "custom_domain" {
 
   name    = var.custom_domain_name
   type    = "A"
-  zone_id = data.aws_route53_zone.custom_domain[0].zone_id
+  zone_id = local.custom_domain_zone_id
 
   alias {
     evaluate_target_health = false

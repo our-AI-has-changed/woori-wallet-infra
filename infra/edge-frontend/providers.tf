@@ -16,3 +16,16 @@ data "terraform_remote_state" "platform" {
     encrypt = true
   }
 }
+
+data "terraform_remote_state" "dns" {
+  count = local.custom_domain_enabled ? 1 : 0
+
+  backend = "s3"
+
+  config = {
+    bucket  = var.state_bucket_name
+    key     = "prd/dns/terraform.tfstate"
+    region  = var.aws_region
+    encrypt = true
+  }
+}

@@ -108,6 +108,12 @@ variable "route53_zone_name" {
   default     = null
 }
 
+variable "route53_zone_id" {
+  description = "Optional public Route53 hosted zone ID used to validate and point the custom domain. Prefer this over route53_zone_name when the zone is managed by Terraform."
+  type        = string
+  default     = null
+}
+
 variable "allowed_source_cidrs" {
   description = "Optional IPv4 CIDR allowlist enforced by AWS WAF on the HTTP API Gateway stage. Leave empty to skip WAF."
   type        = list(string)

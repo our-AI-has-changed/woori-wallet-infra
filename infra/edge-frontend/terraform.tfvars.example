@@ -17,7 +17,7 @@ health_check_matcher       = "200-399"
 api_throttling_burst_limit = 200
 api_throttling_rate_limit  = 100
 
-# custom_domain_name = "app.dannis.cloud"
-# route53_zone_name  = "dannis.cloud"
+custom_domain_name = "frontend.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 
 tags = {}

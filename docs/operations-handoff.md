@@ -40,6 +40,10 @@ infra/platform
   VPC, subnets, NAT Gateway, EKS, managed node group, EBS CSI driver,
   API Gateway VPC Link, shared internal ALB
 
+infra/dns
+  Route53 public hosted zone for dannis.cloud.
+  최초 1회 apply 후 장기 유지하는 기반 리소스입니다.
+
 infra/edge-frontend
   frontend public API Gateway, ALB listener rule, target group,
   EKS node ASG target group attachment, optional custom domain
@@ -133,6 +137,7 @@ API Gateway는 `$default` route를 사용합니다. `/docs`로 들어오면 path
 bucket: woori-wallet-tfstate-655700895912-apne2
 
 prd/platform/terraform.tfstate
+prd/dns/terraform.tfstate
 prd/edge-frontend/terraform.tfstate
 prd/edge-woori/terraform.tfstate
 prd/edge-wallet/terraform.tfstate
@@ -551,6 +556,7 @@ Terraform backend init:
 
 ```sh
 make init SERVICE_MODE=platform
+make init SERVICE_MODE=dns
 make init SERVICE_MODE=edge-frontend
 make init SERVICE_MODE=edge-woori
 make init SERVICE_MODE=edge-wallet
@@ -568,20 +574,23 @@ make apply-all
 ```text
 1. gitops-guard
 2. images-verify
-3. ssm-parameters-ensure
-4. argocd-repo-token-check
-5. terraform apply SERVICE_MODE=platform
-6. aws eks update-kubeconfig
-7. Helm으로 External Secrets Operator 설치
-8. Helm으로 Argo CD 설치
-9. Argo CD infra repo credential Secret 적용
-10. Argo CD Application manifest 적용
-11. monitoring Secret 확인 및 Grafana 준비 대기
-12. app Secret 확인 및 app/DB 준비 대기
-13. terraform apply SERVICE_MODE=edge-frontend
-14. terraform apply SERVICE_MODE=edge-woori
-15. terraform apply SERVICE_MODE=edge-wallet
-16. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
+3. terraform apply SERVICE_MODE=dns
+4. route53-zone-check
+5. route53-delegation-check
+6. ssm-parameters-ensure
+7. argocd-repo-token-check
+8. terraform apply SERVICE_MODE=platform
+9. aws eks update-kubeconfig
+10. Helm으로 External Secrets Operator 설치
+11. Helm으로 Argo CD 설치
+12. Argo CD infra repo credential Secret 적용
+13. Argo CD Application manifest 적용
+14. monitoring Secret 확인 및 Grafana 준비 대기
+15. app Secret 확인 및 app/DB 준비 대기
+16. terraform apply SERVICE_MODE=edge-frontend
+17. terraform apply SERVICE_MODE=edge-woori
+18. terraform apply SERVICE_MODE=edge-wallet
+19. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
 ```
 
 `gitops-guard`는 다음을 확인합니다.
@@ -644,9 +653,9 @@ make output SERVICE_MODE=edge-monitoring
 API 확인:
 
 ```sh
-curl -i "$(terraform -chdir=infra/edge-frontend output -raw frontend_url)"
-curl -i "$(terraform -chdir=infra/edge-wallet output -raw docs_url)"
-curl -i "$(terraform -chdir=infra/edge-woori output -raw docs_url)"
+curl -i "https://frontend.dannis.cloud"
+curl -i "https://wallet-api.dannis.cloud/docs"
+curl -i "https://woori-api.dannis.cloud/docs"
 ```
 
 Grafana 확인:
@@ -675,7 +684,7 @@ make stop-all
 
 이 명령은 DB PVC와 platform 리소스를 유지합니다. MySQL 데이터는 남지만, EKS control plane, NAT Gateway, node group 비용은 계속 발생합니다.
 
-비용을 더 줄이려면 service edge와 platform을 모두 내립니다. `bootstrap/state`는 유지합니다.
+비용을 더 줄이려면 service edge와 platform을 모두 내립니다. `bootstrap/state`와 `infra/dns`는 유지합니다.
 
 권장 명령:
 
@@ -693,7 +702,7 @@ CONFIRM_DATA_DELETE=yes make destroy-all
 5. terraform destroy SERVICE_MODE=edge-woori
 6. workloads-delete
 7. data-delete
-7. terraform destroy SERVICE_MODE=platform
+8. terraform destroy SERVICE_MODE=platform
 ```
 
 순서가 중요한 이유:
@@ -702,6 +711,7 @@ CONFIRM_DATA_DELETE=yes make destroy-all
 edge 스택은 platform의 shared ALB, VPC Link, EKS node ASG를 참조합니다.
 platform을 먼저 지우면 edge destroy가 꼬일 수 있습니다.
 DB PVC는 EBS volume을 만들 수 있으므로 platform destroy 전에 명시적으로 삭제합니다.
+DNS hosted zone은 고정 도메인의 name server를 유지하기 위해 `destroy-all`에서 삭제하지 않습니다.
 ```
 
 데이터 삭제 주의:
@@ -735,7 +745,15 @@ terraform -chdir=infra/edge-woori plan -destroy
 terraform -chdir=infra/platform plan -destroy
 ```
 
-`destroy-all`은 project Terraform 리소스와 Kubernetes workload/PVC를 대상으로 합니다. AWS 계정의 default VPC/default subnet은 이 프로젝트가 만든 리소스가 아니므로 삭제하지 않습니다. 프로젝트 destroy 후 default VPC가 남아 있어도 NAT Gateway, EKS, ALB, API Gateway, EIP 같은 주요 과금 리소스가 없으면 이 프로젝트 비용은 사실상 내려간 상태로 봅니다.
+`destroy-all`은 project Terraform 리소스와 Kubernetes workload/PVC를 대상으로 합니다. `dns` hosted zone은 항상 유지합니다. AWS 계정의 default VPC/default subnet은 이 프로젝트가 만든 리소스가 아니므로 삭제하지 않습니다. 프로젝트 destroy 후 default VPC가 남아 있어도 NAT Gateway, EKS, ALB, API Gateway, EIP 같은 주요 과금 리소스가 없으면 이 프로젝트 비용은 사실상 내려간 상태로 봅니다.
+
+DNS hosted zone을 정말 삭제해야 할 때만 별도 타깃을 사용합니다.
+
+```sh
+CONFIRM_DNS_DELETE=yes make destroy-dns
+```
+
+이 명령은 비용 절감용 종료 절차가 아닙니다. Route53 hosted zone은 EKS control plane, NAT Gateway, node group보다 비용이 작고, hosted zone을 삭제했다가 다시 만들면 Route53 name server 4개가 바뀔 수 있습니다. name server가 바뀌면 외부 도메인 구매처에 NS 4개를 다시 등록해야 합니다.
 
 ## 13. 재기동 절차
 
@@ -778,24 +796,31 @@ platform까지 destroy 후 다시 apply하면 API Gateway ID와 기본 endpoint 
 
 ## 14. Custom Domain
 
-Route53 hosted zone이 있으면 서비스별 서브도메인을 붙일 수 있습니다.
+서비스별 서브도메인은 기본값으로 켜져 있습니다. `platform`까지 destroy 후 다시 apply해도 API Gateway 기본 endpoint는 바뀔 수 있지만, 아래 Route53 custom domain은 같은 주소를 유지합니다.
+
+| 서비스 | Terraform stack | 고정 URL |
+| --- | --- | --- |
+| frontend | `edge-frontend` | `https://frontend.dannis.cloud` |
+| woori-backend | `edge-woori` | `https://woori-api.dannis.cloud` |
+| wallet-backend | `edge-wallet` | `https://wallet-api.dannis.cloud` |
+| Grafana, 선택 적용 | `edge-monitoring` | `https://grafana.dannis.cloud` |
 
 ```hcl
-# infra/edge-wallet/terraform.tfvars
-custom_domain_name = "wallet-api.example.com"
-route53_zone_name  = "example.com"
+# infra/edge-wallet/variables.tf
+custom_domain_name = "wallet-api.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 
-# infra/edge-woori/terraform.tfvars
-custom_domain_name = "woori-api.example.com"
-route53_zone_name  = "example.com"
+# infra/edge-woori/variables.tf
+custom_domain_name = "woori-api.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 
-# infra/edge-frontend/terraform.tfvars
-custom_domain_name = "app.example.com"
-route53_zone_name  = "example.com"
+# infra/edge-frontend/variables.tf
+custom_domain_name = "frontend.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 
-# infra/edge-monitoring/terraform.tfvars
-custom_domain_name = "grafana.example.com"
-route53_zone_name  = "example.com"
+# infra/edge-monitoring/variables.tf
+custom_domain_name = "grafana.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 ```
 
 Terraform이 관리하는 리소스:
@@ -808,7 +833,20 @@ API Gateway API mapping
 Route53 A alias record
 ```
 
-도메인이 아직 없다면 Route53에서 새 도메인을 등록하거나, 외부에서 구매한 도메인을 Route53 hosted zone으로 연결해야 합니다.
+전제 조건:
+
+```text
+infra/dns 스택이 dannis.cloud public Route53 hosted zone을 생성합니다.
+외부 등록기관에서 산 도메인이라면 NS record를 Route53 hosted zone의 name server로 위임해야 합니다.
+외부 도메인 구매처에는 A record가 아니라 make output SERVICE_MODE=dns에 나오는 Route53 name server 4개를 등록합니다.
+infra/dns state가 없거나 zone_id가 비어 있으면 edge apply 단계에서 DNS remote state 조회가 실패합니다.
+apply-all은 platform 비용 리소스 생성 전에 dns apply, make route53-zone-check, make route53-delegation-check를 먼저 실행합니다.
+make output SERVICE_MODE=dns로 Route53 name server를 확인합니다.
+edge 스택은 Route53 hosted zone 이름 조회 대신 infra/dns remote state의 zone_id를 사용합니다.
+edge 스택을 개별 apply할 때도 Makefile의 apply target이 route53-zone-check와 route53-delegation-check를 먼저 실행합니다.
+custom domain을 임시로 끈 edge apply만 필요하면 EDGE_CUSTOM_DOMAIN_ENABLED=no를 명시합니다.
+dig가 없는 환경에서는 NS 위임 검사를 실패시킵니다.
+```
 
 ## 15. 보안 옵션
 

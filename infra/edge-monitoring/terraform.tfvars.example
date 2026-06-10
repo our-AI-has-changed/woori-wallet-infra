@@ -20,8 +20,8 @@ api_throttling_rate_limit  = 5
 # Documentation-only default. Replace with your current admin/VPN public IP CIDR before use.
 admin_allowed_cidrs = ["203.0.113.10/32"]
 
-# custom_domain_name = "grafana.example.com"
-# route53_zone_name  = "example.com"
+custom_domain_name = "grafana.dannis.cloud"
+route53_zone_name  = "dannis.cloud"
 # jwt_issuer   = "https://issuer.example.com"
 # jwt_audience = ["grafana"]
 
