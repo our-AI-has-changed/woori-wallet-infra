@@ -13,6 +13,7 @@ spec:
   target:
     name: backend-env
     creationPolicy: Owner
+    deletionPolicy: Retain
     template:
       type: Opaque
       data:

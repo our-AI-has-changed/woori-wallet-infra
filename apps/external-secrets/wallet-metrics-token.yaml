@@ -13,6 +13,7 @@ spec:
   target:
     name: metrics-token
     creationPolicy: Owner
+    deletionPolicy: Retain
   data:
     - secretKey: METRICS_TOKEN
       remoteRef:
