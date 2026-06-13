@@ -32,6 +32,7 @@ module "edge" {
   health_check_matcher               = var.health_check_matcher
   api_throttling_burst_limit         = var.api_throttling_burst_limit
   api_throttling_rate_limit          = var.api_throttling_rate_limit
+  api_stage_name                     = var.api_stage_name
   jwt_issuer                         = var.jwt_issuer
   jwt_audience                       = var.jwt_audience
   custom_domain_name                 = var.custom_domain_name

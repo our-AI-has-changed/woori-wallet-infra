@@ -133,6 +133,57 @@ data:
               "legendFormat": "{{namespace}} {{phase}}"
             }
           ]
+        },
+        {
+          "id": 9,
+          "title": "wallet-ai HTTP Request Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 28},
+          "targets": [
+            {
+              "expr": "sum by (route, status_code) (rate(http_requests_total{namespace=\"wallet\", service=\"wallet-ai\"}[5m]))",
+              "legendFormat": "{{route}} {{status_code}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            }
+          }
+        },
+        {
+          "id": 10,
+          "title": "wallet-ai HTTP p95 Latency",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 8, "y": 28},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{namespace=\"wallet\", service=\"wallet-ai\"}[5m])))",
+              "legendFormat": "{{route}} p95"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          }
+        },
+        {
+          "id": 11,
+          "title": "wallet-ai HTTP Error Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 8, "x": 16, "y": 28},
+          "targets": [
+            {
+              "expr": "sum by (route, status_code) (rate(http_request_errors_total{namespace=\"wallet\", service=\"wallet-ai\"}[5m]))",
+              "legendFormat": "{{route}} {{status_code}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            }
+          }
         }
       ]
     }

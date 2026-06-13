@@ -30,10 +30,15 @@ output "custom_domain_docs_url" {
 
 output "api_route" {
   description = "API Gateway route path for the service."
-  value       = "$default"
+  value       = aws_apigatewayv2_route.this.route_key
 }
 
 output "waf_web_acl_arn" {
-  description = "AWS WAF web ACL ARN associated with the HTTP API stage, when enabled."
-  value       = try(aws_wafv2_web_acl.this[0].arn, null)
+  description = "Deprecated compatibility output. The module now uses a Lambda REQUEST authorizer for IP allowlisting instead of AWS WAF."
+  value       = null
+}
+
+output "ip_authorizer_function_name" {
+  description = "Lambda authorizer function name used for IP allowlisting, when enabled."
+  value       = try(aws_lambda_function.ip_authorizer[0].function_name, null)
 }

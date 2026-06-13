@@ -39,6 +39,8 @@ spec:
                   key: WALLET_DATABASE_URL
             - name: WALLET_AI_URL
               value: http://wallet-ai:8002
+            - name: WOORI_URL
+              value: http://woori-backend.woori.svc.cluster.local
             - name: MYDATA_API_URL
               value: http://mock-mydata:8003
             - name: METRICS_ENABLED

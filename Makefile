@@ -6,7 +6,8 @@ ARGOCD_CHART_VERSION ?= 7.8.27
 EXTERNAL_SECRETS_CHART_VERSION ?= 0.14.4
 GIT_BRANCH ?= main
 METRICS_TOKEN_PARAMETER ?= /woori-wallet/prod/metrics-token
-TRIAL_BACKEND_ENV_PARAMETER ?= /woori-wallet/prod/trial/backend-env
+TRIAL_WOORI_BACKEND_ENV_PARAMETER ?= /woori-wallet/prod/trial/woori-backend-env
+TRIAL_WALLET_BACKEND_ENV_PARAMETER ?= /woori-wallet/prod/trial/wallet-backend-env
 TRIAL_AI_ENV_PARAMETER ?= /woori-wallet/prod/trial/ai-env
 TRIAL_APP_ENV_PARAMETER ?= /woori-wallet/prod/trial/app-env
 ARGOCD_INFRA_REPO_OWNER ?= our-AI-has-changed
@@ -123,9 +124,10 @@ ssm-parameters-check:
 	err_file="$$(mktemp)"; \
 	trap 'rm -f "$$err_file"' EXIT; \
 	for name in \
-			"$(METRICS_TOKEN_PARAMETER)" \
-			"$(TRIAL_APP_ENV_PARAMETER)" \
-			"$(TRIAL_BACKEND_ENV_PARAMETER)" \
+		"$(METRICS_TOKEN_PARAMETER)" \
+		"$(TRIAL_APP_ENV_PARAMETER)" \
+		"$(TRIAL_WOORI_BACKEND_ENV_PARAMETER)" \
+		"$(TRIAL_WALLET_BACKEND_ENV_PARAMETER)" \
 		"$(TRIAL_AI_ENV_PARAMETER)" \
 		"$(ARGOCD_INFRA_REPO_TOKEN_PARAMETER)" \
 		"$(WOORI_DB_PASSWORD_PARAMETER)" \

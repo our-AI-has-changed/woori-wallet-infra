@@ -2,6 +2,22 @@
 
 이 문서는 `woori-wallet-infra` 저장소를 기준으로 현재 AWS/EKS 인프라 구조, GitOps CD 흐름, 모니터링, DB, 운영 명령, 비용 절감용 종료/재기동 절차를 정리합니다.
 
+## 0. 인수자 Quick Start
+
+인수자는 아래 순서로 보면 됩니다.
+
+```text
+1. README.md와 이 문서의 1~5장을 먼저 읽습니다.
+2. AWS CLI, kubectl, helm, terraform, dig가 로컬에 있는지 확인합니다.
+3. AWS profile이 655700895912 계정과 ap-northeast-2 리전을 바라보는지 확인합니다.
+4. SSM Parameter Store의 필수 SecureString이 있는지 `make ssm-parameters-check`로 확인합니다.
+5. Route53 hosted zone `dannis.cloud`는 비용 절감 destroy 대상이 아니므로 유지합니다.
+6. 전체를 올릴 때는 깨끗한 main 브랜치에서 `make apply-all`을 사용합니다.
+7. 전체를 내릴 때는 Route53을 제외하고 `CONFIRM_DATA_DELETE=yes make destroy-all`을 사용합니다.
+```
+
+팀원이 레포를 받아서 작업할 때 Git에 있어야 하는 것은 Terraform 코드, Kubernetes manifest, Argo CD Application, Helm values, 문서입니다. Git에 있으면 안 되는 것은 실제 `terraform.tfvars`, Terraform state, AWS/GitHub/DB/API secret 값입니다.
+
 ## 1. 현재 결론
 
 현재 구조는 다음 원칙으로 정리되어 있습니다.
@@ -12,6 +28,7 @@ Kubernetes 앱/DB/모니터링은 Argo CD + Helm + manifest로 관리한다.
 앱 배포 기준은 ECR image가 아니라 infra repo main 브랜치의 manifest다.
 비용 절감을 위해 RDS와 AWS Managed Prometheus/Grafana는 쓰지 않는다.
 Grafana 외부 공개는 선택 사항이며 기본 apply-all에서는 만들지 않는다.
+Route53 hosted zone은 장기 유지 리소스라 destroy-all에서 제외한다.
 ```
 
 중요한 기본값:
@@ -57,7 +74,7 @@ infra/edge-wallet
   EKS node ASG target group attachment, optional custom domain
 
 infra/edge-monitoring
-  Grafana public API Gateway, WAF IP allowlist, ALB listener rule,
+  Grafana public API Gateway, Lambda authorizer IP allowlist, ALB listener rule,
   target group, optional custom domain
 
 modules/service-edge
@@ -106,7 +123,7 @@ Client / Mobile App
 
 Admin / VPN IP
   -> monitoring HTTP API Gateway
-  -> AWS WAF IP allowlist
+  -> API Gateway Lambda IP authorizer
   -> API Gateway VPC Link
   -> shared internal ALB
   -> Host: grafana.internal listener rule
@@ -161,7 +178,8 @@ state bucket은 비용이 거의 작고, 전체 destroy 후 재기동을 위해 
 
 ```text
 /woori-wallet/prod/metrics-token
-/woori-wallet/prod/trial/backend-env
+/woori-wallet/prod/trial/woori-backend-env
+/woori-wallet/prod/trial/wallet-backend-env
 /woori-wallet/prod/trial/ai-env
 /woori-wallet/prod/argocd-infra-repo-token
 /woori-wallet/prod/woori-db-password
@@ -169,6 +187,47 @@ state bucket은 비용이 거의 작고, 전체 destroy 후 재기동을 위해 
 /woori-wallet/prod/wallet-db-password
 /woori-wallet/prod/wallet-db-root-password
 ```
+
+trial 앱 repo의 현재 `feature/wallet-trial-polish` 구조는 `backend-woori`, `backend-wallet`, `ai`, `app`으로 나뉘어 있습니다. 따라서 backend runtime env도 하나의 공통 `backend-env`가 아니라 woori-backend와 wallet-backend로 분리합니다.
+
+SSM 값 예시:
+
+```env
+# /woori-wallet/prod/trial/woori-backend-env
+CORS_ORIGINS=https://frontend.dannis.cloud
+SOLAPI_API_KEY=
+SOLAPI_API_SECRET=
+SOLAPI_FROM=
+```
+
+```env
+# /woori-wallet/prod/trial/wallet-backend-env
+CORS_ORIGINS=https://frontend.dannis.cloud
+WALLET_AI_URL=http://wallet-ai:8002
+```
+
+```env
+# /woori-wallet/prod/trial/ai-env
+ACTIVE_MODE=cloud
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+NAVER_CLIENT_ID=
+NAVER_CLIENT_SECRET=
+LANGCHAIN_TRACING_V2=false
+LANGCHAIN_API_KEY=
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+METRICS_ENABLED=true
+METRICS_TOKEN=
+```
+
+```env
+# /woori-wallet/prod/trial/app-env
+API_BASE_URL=https://woori-api.dannis.cloud/api
+WALLET_API_BASE_URL=https://wallet-api.dannis.cloud/api
+WOORI_USER_NAME=홍길동
+```
+
+DB URL은 위 dotenv SSM에 넣지 않습니다. EKS에서는 `db-secret` target이 DB password SSM을 읽어서 `WOORI_DATABASE_URL`, `WALLET_DATABASE_URL`을 별도 Kubernetes Secret으로 만듭니다.
 
 backend/AI/metrics runtime secret은 External Secrets Operator가 SSM Parameter Store에서 읽어 Kubernetes Secret으로 동기화합니다. Terraform platform 스택은 ESO용 IRSA role과 SSM/KMS 권한만 만들며, secret 값 자체를 Terraform state에 넣지 않습니다.
 
@@ -194,7 +253,7 @@ make secrets-apply
 CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 ```
 
-이 명령은 이미 존재하는 값을 덮어쓰지 않습니다. `backend-env`, `ai-env`, Argo CD infra repo token은 실제 설정값이 필요하므로 자동 랜덤 생성 대상이 아닙니다. 운영에서 정해진 DB 비밀번호를 사용해야 한다면 AWS 콘솔 또는 AWS CLI로 SecureString을 직접 만든 뒤 아래 명령으로 확인합니다.
+이 명령은 이미 존재하는 값을 덮어쓰지 않습니다. `woori-backend-env`, `wallet-backend-env`, `ai-env`, `app-env`, Argo CD infra repo token은 실제 설정값이 필요하므로 자동 랜덤 생성 대상이 아닙니다. 운영에서 정해진 DB 비밀번호를 사용해야 한다면 AWS 콘솔 또는 AWS CLI로 SecureString을 직접 만든 뒤 아래 명령으로 확인합니다.
 
 ```sh
 make ssm-parameters-check
@@ -244,11 +303,12 @@ runtime secret 연결:
 
 | SSM Parameter | Kubernetes Secret | Pod 주입 방식 |
 | --- | --- | --- |
-| `/woori-wallet/prod/trial/backend-env` | `wallet/backend-env`, `woori/backend-env` key `.env` | backend Pod가 `/service/.env`로 mount |
+| `/woori-wallet/prod/trial/woori-backend-env` | `woori/backend-env` key `.env` | woori-backend Pod가 `/service/.env`로 mount |
+| `/woori-wallet/prod/trial/wallet-backend-env` | `wallet/backend-env` key `.env` | wallet-backend Pod가 `/service/.env`로 mount |
 | `/woori-wallet/prod/trial/ai-env` | `wallet/ai-env` key `.env` | wallet-ai Pod가 `/app/.env`로 mount |
-| `/woori-wallet/prod/metrics-token` | `wallet/metrics-token`, `woori/metrics-token`, `monitoring/metrics-token` key `METRICS_TOKEN` | backend env와 Prometheus ServiceMonitor 인증 |
+| `/woori-wallet/prod/metrics-token` | `wallet/metrics-token`, `woori/metrics-token`, `monitoring/metrics-token` key `METRICS_TOKEN` | backend/wallet-ai env와 Prometheus ServiceMonitor 인증 |
 
-`backend-env`와 `ai-env`는 현재 dotenv 문자열 한 덩어리입니다. ESO는 이 값을 그대로 Secret의 `.env` 파일 key로 동기화하고, Pod가 파일로 mount합니다. 운영성이 더 좋은 대안은 SSM을 키별로 나누는 방식입니다. 예를 들어 `/woori-wallet/prod/trial/backend/WOORI_JWT_SECRET`, `/woori-wallet/prod/trial/backend/SOLAPI_API_KEY`처럼 분리하면 Deployment에서 `envFrom`으로 받을 수 있고 회전/누락 검증이 쉬워집니다. 대신 SSM Parameter 수와 ExternalSecret mapping이 늘어납니다.
+backend/AI env는 현재 trial repo의 `backend-woori/.env.example`, `backend-wallet/.env.example`, `ai/.env.example`에 맞춰 서비스별 dotenv 문자열 한 덩어리입니다. ESO는 이 값을 그대로 Secret의 `.env` 파일 key로 동기화하고, Pod가 파일로 mount합니다. 운영성이 더 좋은 대안은 SSM을 키별로 나누는 방식입니다. 예를 들어 `/woori-wallet/prod/trial/wallet-backend/WALLET_AI_URL`, `/woori-wallet/prod/trial/ai/OPENAI_API_KEY`처럼 분리하면 Deployment에서 `envFrom`으로 받을 수 있고 회전/누락 검증이 쉬워집니다. 대신 SSM Parameter 수와 ExternalSecret mapping이 늘어납니다.
 
 ClusterSecretStore는 `make external-secrets-install`이 관리하고, namespace별 ExternalSecret manifest는 Argo CD가 관리합니다. 운영 중 ESO가 만든 runtime Secret이 지워지면 ExternalSecret reconcile로 복구됩니다. DB/Grafana/Argo CD repo Secret이 지워지면 아래 명령으로 복구합니다.
 
@@ -467,12 +527,28 @@ namespace별 CPU / memory 사용량
 wallet / woori namespace 리소스 사용량
 wallet-backend /metrics 앱 내부 지표
 woori-backend /metrics 앱 내부 지표
+wallet-ai /metrics 앱 내부 지표
 ```
 
 Dashboard:
 
 ```text
 addons/monitoring/dashboards/wallet-woori-overview.yaml
+```
+
+대시보드 주요 패널:
+
+```text
+wallet-backend Pod Up/Down
+woori-backend Pod Up/Down
+Node Ready
+Deployment available / desired replicas
+wallet / woori namespace CPU, memory
+pod restart count
+pod status by phase
+wallet-ai HTTP request rate
+wallet-ai HTTP p95 latency
+wallet-ai HTTP error rate
 ```
 
 Alert rule:
@@ -495,6 +571,7 @@ namespace memory usage가 높은 상태 지속
 ServiceMonitor:
 
 ```text
+addons/monitoring/servicemonitors/wallet-ai.yaml
 addons/monitoring/servicemonitors/wallet-backend.yaml
 addons/monitoring/servicemonitors/woori-backend.yaml
 ```
@@ -502,9 +579,9 @@ addons/monitoring/servicemonitors/woori-backend.yaml
 Prometheus scrape 인증:
 
 ```text
-backend /metrics는 METRICS_TOKEN으로 보호됩니다.
+backend와 wallet-ai /metrics는 METRICS_TOKEN으로 보호됩니다.
 ExternalSecret이 wallet, woori, monitoring namespace에 metrics-token Secret을 동기화합니다.
-ServiceMonitor는 Authorization: Bearer <token>으로 backend를 scrape합니다.
+ServiceMonitor는 Authorization: Bearer <token>으로 wallet-backend, woori-backend, wallet-ai를 scrape합니다.
 외부 API Gateway 경로의 /metrics는 ALB에서 403으로 차단합니다.
 ```
 
@@ -527,7 +604,7 @@ Grafana 외부 공개:
 기본 apply-all에서는 edge-monitoring을 만들지 않습니다.
 외부 공개가 필요할 때만 ENABLE_GRAFANA_EDGE=yes를 사용합니다.
 Prometheus와 Alertmanager는 계속 비공개입니다.
-edge-monitoring은 AWS WAF allowlist를 사용합니다.
+edge-monitoring은 API Gateway Lambda REQUEST authorizer allowlist를 사용합니다.
 ```
 
 ```hcl
@@ -603,7 +680,7 @@ local HEAD가 origin/main과 같은지
 
 `images-verify`는 `apps/*/deployment.yaml`이 가리키는 ECR image tag가 실제 ECR에 존재하는지 확인합니다.
 
-`ssm-parameters-ensure`는 필수 SSM Parameter가 있는지 확인합니다. `CREATE_MISSING_SSM_PARAMETERS=yes`가 있으면 DB password와 metrics token의 누락 값만 랜덤 SecureString으로 생성합니다. backend-env, ai-env, app-env, Argo CD infra repo token은 실제 값이 필요하므로 직접 만든 SecureString이 없으면 실패합니다. app-env는 frontend Docker build 시점에 `API_BASE_URL`, `WALLET_API_BASE_URL`, `WOORI_USER_NAME`으로 주입됩니다. 이어서 `argocd-repo-token-check`가 token의 repo read 권한을 확인합니다. 이 검사를 `platform` apply 전에 실행하는 이유는 EKS/NAT를 만든 뒤 Secret 생성이나 Argo CD sync에서 뒤늦게 실패하는 상황을 막기 위해서입니다.
+`ssm-parameters-ensure`는 필수 SSM Parameter가 있는지 확인합니다. `CREATE_MISSING_SSM_PARAMETERS=yes`가 있으면 DB password와 metrics token의 누락 값만 랜덤 SecureString으로 생성합니다. woori-backend-env, wallet-backend-env, ai-env, app-env, Argo CD infra repo token은 실제 값이 필요하므로 직접 만든 SecureString이 없으면 실패합니다. app-env는 frontend Docker build 시점에 `API_BASE_URL`, `WALLET_API_BASE_URL`, `WOORI_USER_NAME`으로 주입됩니다. 이어서 `argocd-repo-token-check`가 token의 repo read 권한을 확인합니다. 이 검사를 `platform` apply 전에 실행하는 이유는 EKS/NAT를 만든 뒤 Secret 생성이나 Argo CD sync에서 뒤늦게 실패하는 상황을 막기 위해서입니다.
 
 수동으로 나눠서 올릴 때:
 
@@ -878,10 +955,18 @@ jwt_issuer   = "https://issuer.example.com"
 jwt_audience = ["wallet-api"]
 ```
 
-Grafana public edge는 WAF allowlist를 사용합니다.
+Grafana public edge는 Lambda authorizer IP allowlist를 사용합니다.
 
 ```hcl
 admin_allowed_cidrs = ["관리자-또는-VPN-공인IP/32"]
+```
+
+주의:
+
+```text
+HTTP API Gateway route는 한 route에 하나의 authorizer만 연결할 수 있습니다.
+현재 service-edge module에서는 IP allowlist가 설정되면 Lambda REQUEST authorizer가 우선 적용되고 JWT authorizer는 꺼집니다.
+즉 IP allowlist와 JWT authorizer를 동시에 같은 route에 걸지는 않습니다.
 ```
 
 ## 16. 비용 관련 결정사항
@@ -1035,3 +1120,5 @@ git diff --check
 ```
 
 실제 AWS apply/destroy는 비용과 리소스 영향이 있으므로 명시 요청이 있을 때만 실행합니다.
+
+현재 로컬에서 Terraform provider plugin handshake 문제가 발생할 수 있습니다. 이 경우 `terraform validate`가 코드 문제가 아니라 provider schema 로딩 단계에서 실패할 수 있으므로, `terraform init -reconfigure` 후 다시 확인합니다.

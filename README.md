@@ -38,7 +38,7 @@ EKS
 │   ├── edge-frontend            # frontend API Gateway, ALB rule, target group
 │   ├── edge-woori               # woori API Gateway, ALB rule, target group
 │   ├── edge-wallet              # wallet API Gateway, ALB rule, target group
-│   └── edge-monitoring          # Grafana API Gateway, WAF allowlist, ALB rule, target group
+│   └── edge-monitoring          # Grafana API Gateway, Lambda IP allowlist, ALB rule, target group
 ├── modules/service-edge          # 서비스별 public edge 공통 Terraform 모듈
 ├── apps                          # Argo CD가 sync하는 앱/DB Kubernetes manifest
 ├── addons
@@ -59,7 +59,7 @@ EKS
 | `SERVICE_MODE=edge-frontend` | frontend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
 | `SERVICE_MODE=edge-woori` | woori-backend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
 | `SERVICE_MODE=edge-wallet` | wallet-backend public API Gateway, ALB listener rule, target group, ASG attachment, optional custom domain |
-| `SERVICE_MODE=edge-monitoring` | Grafana public API Gateway, WAF IP allowlist, ALB listener rule, target group, optional custom domain |
+| `SERVICE_MODE=edge-monitoring` | Grafana public API Gateway, Lambda authorizer IP allowlist, ALB listener rule, target group, optional custom domain |
 
 호환성을 위해 `SERVICE_MODE=woori`, `SERVICE_MODE=wallet`, `SERVICE_MODE=frontend`도 각각 `edge-woori`, `edge-wallet`, `edge-frontend`로 매핑됩니다.
 
@@ -132,7 +132,8 @@ wallet-backend -> woori-db.woori.svc.cluster.local:3306/woori_auth
 
 ```text
 /woori-wallet/prod/metrics-token
-/woori-wallet/prod/trial/backend-env
+/woori-wallet/prod/trial/woori-backend-env
+/woori-wallet/prod/trial/wallet-backend-env
 /woori-wallet/prod/trial/ai-env
 /woori-wallet/prod/argocd-infra-repo-token
 /woori-wallet/prod/woori-db-password
@@ -165,7 +166,7 @@ make secrets-apply
 CREATE_MISSING_SSM_PARAMETERS=yes make ssm-parameters-bootstrap
 ```
 
-이 타깃은 이미 존재하는 SSM 값은 덮어쓰지 않습니다. `backend-env`, `ai-env`, Argo CD infra repo token은 실제 설정값이 필요하므로 자동 랜덤 생성 대상이 아닙니다. 운영에서 정해진 DB 비밀번호를 써야 한다면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만든 뒤 `make ssm-parameters-check`로 확인합니다.
+이 타깃은 이미 존재하는 SSM 값은 덮어쓰지 않습니다. `woori-backend-env`, `wallet-backend-env`, `ai-env`, `app-env`, Argo CD infra repo token은 실제 설정값이 필요하므로 자동 랜덤 생성 대상이 아닙니다. 운영에서 정해진 DB 비밀번호를 써야 한다면 AWS 콘솔 또는 AWS CLI로 직접 SecureString을 만든 뒤 `make ssm-parameters-check`로 확인합니다.
 
 `/woori-wallet/prod/argocd-infra-repo-token`은 랜덤값으로 만들면 안 되므로 bootstrap 대상이 아닙니다. private infra repo를 읽을 수 있는 GitHub token 또는 GitHub App token을 SecureString으로 직접 넣어야 합니다. 초기 구성은 fine-grained PAT를 사용하고, 최소 권한은 `our-AI-has-changed/woori-wallet-infra` repository `contents: read`입니다. `make argocd-repo-token-check`로 token이 실제 repo를 읽을 수 있는지 미리 검증합니다.
 
@@ -189,11 +190,12 @@ SSM에서 Kubernetes Secret/env로 이어지는 runtime 연결:
 
 | SSM Parameter | Kubernetes Secret | Pod 주입 방식 |
 | --- | --- | --- |
-| `/woori-wallet/prod/trial/backend-env` | `wallet/backend-env`, `woori/backend-env` key `.env` | `wallet-backend`, `woori-backend`가 `/service/.env`로 mount |
+| `/woori-wallet/prod/trial/woori-backend-env` | `woori/backend-env` key `.env` | `woori-backend`가 `/service/.env`로 mount |
+| `/woori-wallet/prod/trial/wallet-backend-env` | `wallet/backend-env` key `.env` | `wallet-backend`가 `/service/.env`로 mount |
 | `/woori-wallet/prod/trial/ai-env` | `wallet/ai-env` key `.env` | `wallet-ai`가 `/app/.env`로 mount |
 | `/woori-wallet/prod/metrics-token` | `wallet/metrics-token`, `woori/metrics-token`, `monitoring/metrics-token` key `METRICS_TOKEN` | backend Pod env `METRICS_TOKEN`, ServiceMonitor scrape auth |
 
-`backend-env`와 `ai-env`는 현재 dotenv 문자열 한 덩어리입니다. 이 방식은 앱 코드가 `.env` 파일을 읽는 현재 구조와 잘 맞고, Git/plan/log에 값을 남기지 않는 장점이 있습니다. 더 운영적으로 깔끔한 방식은 `WOORI_JWT_SECRET`, `SOLAPI_API_KEY`, `OPENAI_API_KEY`처럼 키별 SSM Parameter로 분리한 뒤 ExternalSecret이 개별 Kubernetes Secret key로 동기화하고 Deployment가 `envFrom`으로 받는 구조입니다. 키별 분리는 manifest가 조금 길어지지만 Secret 회전, 누락 검증, 권한 분리가 쉬워집니다.
+backend/AI env는 현재 trial repo의 `backend-woori/.env.example`, `backend-wallet/.env.example`, `ai/.env.example`에 맞춰 서비스별 dotenv 문자열 한 덩어리로 저장합니다. 이 방식은 앱 코드가 `.env` 파일을 읽는 현재 구조와 잘 맞고, Git/plan/log에 값을 남기지 않는 장점이 있습니다. 더 운영적으로 깔끔한 방식은 `SOLAPI_API_KEY`, `OPENAI_API_KEY`처럼 키별 SSM Parameter로 분리한 뒤 ExternalSecret이 개별 Kubernetes Secret key로 동기화하고 Deployment가 `envFrom`으로 받는 구조입니다. 키별 분리는 manifest가 조금 길어지지만 Secret 회전, 누락 검증, 권한 분리가 쉬워집니다.
 
 SSM 값을 변경하면 ESO가 Kubernetes Secret은 갱신하지만, 실행 중인 backend/AI 프로세스가 `.env` 파일을 자동으로 다시 읽지는 않습니다. 값 변경 후에는 Pod를 재시작합니다.
 

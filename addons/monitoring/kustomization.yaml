@@ -3,5 +3,6 @@ resources:
   - secrets/metrics-token.yaml
   - alerts/prometheus-rules.yaml
   - dashboards/wallet-woori-overview.yaml
+  - servicemonitors/wallet-ai.yaml
   - servicemonitors/wallet-backend.yaml
   - servicemonitors/woori-backend.yaml

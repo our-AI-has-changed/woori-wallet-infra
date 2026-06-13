@@ -84,6 +84,12 @@ variable "api_throttling_rate_limit" {
   type        = number
 }
 
+variable "api_stage_name" {
+  description = "API Gateway stage name. Use a named stage when an explicit stage path is preferred; custom domains map to this stage."
+  type        = string
+  default     = "$default"
+}
+
 variable "jwt_issuer" {
   description = "Optional JWT issuer URL for API Gateway authorization. Leave null to disable gateway-level JWT auth."
   type        = string
@@ -115,7 +121,7 @@ variable "route53_zone_id" {
 }
 
 variable "allowed_source_cidrs" {
-  description = "Optional IPv4 CIDR allowlist enforced by AWS WAF on the HTTP API Gateway stage. Leave empty to skip WAF."
+  description = "Optional IPv4 CIDR allowlist enforced by an API Gateway Lambda REQUEST authorizer. Leave empty to skip IP allowlisting. HTTP API routes support one authorizer, so this takes precedence over the optional JWT authorizer."
   type        = list(string)
   default     = []
 }

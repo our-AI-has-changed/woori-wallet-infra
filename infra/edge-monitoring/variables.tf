@@ -94,6 +94,12 @@ variable "api_throttling_rate_limit" {
   default     = 5
 }
 
+variable "api_stage_name" {
+  description = "API Gateway stage name for Grafana."
+  type        = string
+  default     = "prod"
+}
+
 variable "admin_allowed_cidrs" {
   description = "IPv4 CIDR allowlist for public Grafana access. Replace the documentation-only default with an administrator or VPN public IP CIDR before use."
   type        = list(string)

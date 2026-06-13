@@ -59,8 +59,13 @@ output "custom_domain_grafana_url" {
 }
 
 output "waf_web_acl_arn" {
-  description = "AWS WAF web ACL ARN protecting Grafana."
+  description = "Deprecated compatibility output. Grafana IP allowlisting is enforced by API Gateway Lambda authorizer."
   value       = module.edge.waf_web_acl_arn
+}
+
+output "ip_authorizer_function_name" {
+  description = "Lambda authorizer function name enforcing Grafana IP allowlisting."
+  value       = module.edge.ip_authorizer_function_name
 }
 
 output "api_route" {

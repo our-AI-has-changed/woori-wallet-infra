@@ -24,6 +24,14 @@ spec:
           ports:
             - name: http
               containerPort: 8002
+          env:
+            - name: METRICS_ENABLED
+              value: "true"
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: metrics-token
+                  key: METRICS_TOKEN
           volumeMounts:
             - name: ai-env
               mountPath: /app/.env

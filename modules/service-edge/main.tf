@@ -1,10 +1,10 @@
 locals {
-  custom_domain_enabled  = var.custom_domain_name != null && (var.route53_zone_id != null || var.route53_zone_name != null)
-  custom_domain_zone_id  = local.custom_domain_enabled ? (var.route53_zone_id != null ? var.route53_zone_id : data.aws_route53_zone.custom_domain[0].zone_id) : null
-  jwt_authorizer_enabled = var.jwt_issuer != null && length(var.jwt_audience) > 0
-  waf_enabled            = length(var.allowed_source_cidrs) > 0
-  waf_metric_prefix      = replace("${var.name_prefix}-${var.service}", "-", "_")
-  blocked_paths          = distinct(var.blocked_paths)
+  custom_domain_enabled       = var.custom_domain_name != null && (var.route53_zone_id != null || var.route53_zone_name != null)
+  custom_domain_zone_id       = local.custom_domain_enabled ? (var.route53_zone_id != null ? var.route53_zone_id : data.aws_route53_zone.custom_domain[0].zone_id) : null
+  ip_authorizer_enabled       = length(var.allowed_source_cidrs) > 0
+  jwt_authorizer_enabled      = !local.ip_authorizer_enabled && var.jwt_issuer != null && length(var.jwt_audience) > 0
+  ip_authorizer_function_name = substr(replace("${var.name_prefix}-${var.service}-ip-authorizer", "/[^a-zA-Z0-9-_]/", "-"), 0, 64)
+  blocked_paths               = distinct(var.blocked_paths)
 }
 
 resource "aws_apigatewayv2_api" "this" {
@@ -16,12 +16,16 @@ resource "aws_apigatewayv2_api" "this" {
 
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.this.id
-  name        = "$default"
+  name        = var.api_stage_name
   auto_deploy = true
 
   default_route_settings {
     throttling_burst_limit = var.api_throttling_burst_limit
     throttling_rate_limit  = var.api_throttling_rate_limit
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 
   tags = var.common_tags
@@ -39,6 +43,99 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
     audience = var.jwt_audience
     issuer   = var.jwt_issuer
   }
+}
+
+data "archive_file" "ip_authorizer" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  type        = "zip"
+  source_file = "${path.module}/lambda/ip_authorizer.py"
+  output_path = "${path.root}/.terraform/${local.ip_authorizer_function_name}.zip"
+}
+
+resource "aws_iam_role" "ip_authorizer" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  name = local.ip_authorizer_function_name
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = var.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "ip_authorizer_basic" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  role       = aws_iam_role.ip_authorizer[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_cloudwatch_log_group" "ip_authorizer" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  name              = "/aws/lambda/${local.ip_authorizer_function_name}"
+  retention_in_days = 7
+
+  tags = var.common_tags
+}
+
+resource "aws_lambda_function" "ip_authorizer" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  function_name    = local.ip_authorizer_function_name
+  role             = aws_iam_role.ip_authorizer[0].arn
+  handler          = "ip_authorizer.handler"
+  runtime          = "python3.12"
+  filename         = data.archive_file.ip_authorizer[0].output_path
+  source_code_hash = data.archive_file.ip_authorizer[0].output_base64sha256
+  timeout          = 3
+  memory_size      = 128
+
+  environment {
+    variables = {
+      ALLOWED_CIDRS = join(",", var.allowed_source_cidrs)
+    }
+  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.ip_authorizer,
+    aws_iam_role_policy_attachment.ip_authorizer_basic,
+  ]
+
+  tags = var.common_tags
+}
+
+resource "aws_lambda_permission" "ip_authorizer_api_gateway" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  statement_id  = "AllowExecutionFromApiGateway"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ip_authorizer[0].function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.this.execution_arn}/*/*"
+}
+
+resource "aws_apigatewayv2_authorizer" "ip" {
+  count = local.ip_authorizer_enabled ? 1 : 0
+
+  api_id                            = aws_apigatewayv2_api.this.id
+  authorizer_type                   = "REQUEST"
+  authorizer_uri                    = aws_lambda_function.ip_authorizer[0].invoke_arn
+  authorizer_payload_format_version = "2.0"
+  authorizer_result_ttl_in_seconds  = 0
+  enable_simple_responses           = true
+  name                              = "${var.name_prefix}-${var.service}-ip-allowlist"
 }
 
 data "aws_route53_zone" "custom_domain" {
@@ -217,68 +314,8 @@ resource "aws_apigatewayv2_integration" "this" {
 
 resource "aws_apigatewayv2_route" "this" {
   api_id             = aws_apigatewayv2_api.this.id
-  authorization_type = local.jwt_authorizer_enabled ? "JWT" : "NONE"
-  authorizer_id      = local.jwt_authorizer_enabled ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  authorization_type = local.ip_authorizer_enabled ? "CUSTOM" : (local.jwt_authorizer_enabled ? "JWT" : "NONE")
+  authorizer_id      = local.ip_authorizer_enabled ? aws_apigatewayv2_authorizer.ip[0].id : (local.jwt_authorizer_enabled ? aws_apigatewayv2_authorizer.jwt[0].id : null)
   route_key          = "$default"
   target             = "integrations/${aws_apigatewayv2_integration.this.id}"
-}
-
-resource "aws_wafv2_ip_set" "allowed_sources" {
-  count = local.waf_enabled ? 1 : 0
-
-  name               = "${var.name_prefix}-${var.service}-allowed-sources"
-  description        = "Allowed source IP CIDRs for ${var.name_prefix}-${var.service}."
-  scope              = "REGIONAL"
-  ip_address_version = "IPV4"
-  addresses          = var.allowed_source_cidrs
-
-  tags = var.common_tags
-}
-
-resource "aws_wafv2_web_acl" "this" {
-  count = local.waf_enabled ? 1 : 0
-
-  name        = "${var.name_prefix}-${var.service}-web-acl"
-  description = "IP allowlist for ${var.name_prefix}-${var.service} HTTP API."
-  scope       = "REGIONAL"
-
-  default_action {
-    block {}
-  }
-
-  rule {
-    name     = "AllowSourceCidrs"
-    priority = 0
-
-    action {
-      allow {}
-    }
-
-    statement {
-      ip_set_reference_statement {
-        arn = aws_wafv2_ip_set.allowed_sources[0].arn
-      }
-    }
-
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${local.waf_metric_prefix}_allow_sources"
-      sampled_requests_enabled   = true
-    }
-  }
-
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "${local.waf_metric_prefix}_web_acl"
-    sampled_requests_enabled   = true
-  }
-
-  tags = var.common_tags
-}
-
-resource "aws_wafv2_web_acl_association" "api_gateway_stage" {
-  count = local.waf_enabled ? 1 : 0
-
-  resource_arn = aws_apigatewayv2_stage.default.arn
-  web_acl_arn  = aws_wafv2_web_acl.this[0].arn
 }
