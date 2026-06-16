@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: mock-mydata
-          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/mock-mydata:sha-0cf2236
+          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/mock-mydata:sha-092219d
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
