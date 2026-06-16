@@ -309,7 +309,7 @@ kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-passwor
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3001:80
 ```
 
-Grafana는 `https://grafana.dannis.cloud` Ingress로 상시 접근합니다. Prometheus와 Alertmanager는 계속 비공개입니다. 임시 로컬 확인이 필요하면 port-forward를 사용할 수 있습니다.
+Grafana는 `https://grafana.dannis.cloud` Ingress로 상시 접근합니다. Argo CD는 `https://argocd.dannis.cloud` Ingress로 접근하며, 현재 공인 IP `182.227.198.110/32`만 ALB inbound allowlist에 허용합니다. Prometheus와 Alertmanager는 계속 비공개입니다. 임시 로컬 확인이 필요하면 port-forward를 사용할 수 있습니다.
 
 ## 빠른 시작
 
@@ -357,6 +357,7 @@ kubectl -n frontend get ingress frontend
 kubectl -n wallet get ingress wallet-backend
 kubectl -n woori get ingress woori-backend
 kubectl -n monitoring get ingress grafana
+kubectl -n argocd get ingress argocd-server
 ```
 
 `platform`까지 destroy 후 다시 apply하면 public ALB DNS 이름은 바뀔 수 있습니다. 서비스별 고정 URL은 아래를 기준으로 둡니다.
@@ -367,10 +368,11 @@ kubectl -n monitoring get ingress grafana
 | woori-backend | `https://woori-api.dannis.cloud` |
 | wallet-backend | `https://wallet-api.dannis.cloud` |
 | Grafana | `https://grafana.dannis.cloud` |
+| Argo CD | `https://argocd.dannis.cloud` |
 
 `dns` Terraform 스택은 `dannis.cloud` public Route53 hosted zone과 public ALB용 `*.dannis.cloud` ACM certificate를 생성합니다. 이 스택은 최초 1회 apply 후 계속 유지하는 장기 기반 리소스입니다.
 
-Ingress는 `frontend.dannis.cloud`, `wallet-api.dannis.cloud`, `woori-api.dannis.cloud`, `grafana.dannis.cloud` host로 public ALB를 생성합니다. AWS Load Balancer Controller는 `dns` 스택이 만든 같은 region의 wildcard ACM certificate를 자동 탐색합니다. ExternalDNS는 설치하지 않으므로, apply 후 `kubectl get ingress -A`의 `ADDRESS` 값을 확인해 Route53에서 위 네 host를 해당 ALB로 alias 연결합니다.
+Ingress는 `frontend.dannis.cloud`, `wallet-api.dannis.cloud`, `woori-api.dannis.cloud`, `grafana.dannis.cloud`, `argocd.dannis.cloud` host로 public ALB를 생성합니다. Argo CD는 IP allowlist를 분리하기 위해 별도 ALB를 사용합니다. AWS Load Balancer Controller는 `dns` 스택이 만든 같은 region의 wildcard ACM certificate를 사용합니다. ExternalDNS는 설치하지 않으므로, apply 후 `kubectl get ingress -A`의 `ADDRESS` 값을 확인해 Route53에서 각 host를 해당 ALB로 alias 연결합니다.
 
 외부 도메인 구매처에서 `dannis.cloud`를 샀다면, `make output SERVICE_MODE=dns`에 나오는 Route53 name server 4개를 구매처 DNS 설정에 위임해야 합니다. 외부 도메인 구매처에는 A record가 아니라 Route53 name server 4개를 등록합니다. 위임 전에는 ACM certificate 검증이 완료되지 않아 `dns` apply가 오래 기다리다 실패할 수 있습니다.
 

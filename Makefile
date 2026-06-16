@@ -235,6 +235,7 @@ argocd-install:
 	helm repo update
 	helm upgrade --install argocd argo/argo-cd --namespace argocd --create-namespace --version $(ARGOCD_CHART_VERSION) --values addons/argocd/values.yaml --wait --timeout 300s
 	kubectl wait --for condition=Established crd/applications.argoproj.io --timeout=120s
+	kubectl apply -f addons/argocd/ingress.yaml
 
 argocd-repo-token-check:
 	@set -e; \
@@ -522,6 +523,7 @@ workloads-delete:
 	kubectl -n frontend delete ingress frontend --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete ingress wallet-backend --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete ingress woori-backend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n argocd delete ingress argocd-server --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete statefulset wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete statefulset woori-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete service wallet-backend wallet-ai mock-mydata wallet-db --ignore-not-found=true --wait=true --timeout=300s; \

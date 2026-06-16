@@ -27,8 +27,10 @@ Terraform은 AWS 인프라와 DNS 기반 리소스를 관리한다.
 Kubernetes 앱/DB/모니터링은 Argo CD + Helm + manifest로 관리한다.
 앱 배포 기준은 ECR image가 아니라 infra repo main 브랜치의 manifest다.
 frontend, wallet-backend, woori-backend, Grafana public 진입은 AWS Load Balancer Controller Ingress가 만든 public ALB를 사용한다.
+Argo CD public 진입은 IP allowlist가 적용된 별도 public ALB Ingress를 사용한다.
 비용 절감을 위해 RDS와 AWS Managed Prometheus/Grafana는 쓰지 않는다.
 Grafana는 `grafana.dannis.cloud` Ingress로 상시 접근한다.
+Argo CD는 `argocd.dannis.cloud` Ingress로 상시 접근하되, ALB inbound allowlist로 현재 공인 IP `182.227.198.110/32`만 허용한다.
 Route53 hosted zone은 장기 유지 리소스라 destroy-all에서 제외한다.
 ```
 
@@ -466,7 +468,7 @@ private infra repo를 쓰므로 Argo CD Application 적용 전에 repository cre
 
 `make argocd-apply`와 `make monitoring-apply`는 Application manifest의 `__ARGOCD_INFRA_REPO_URL__` placeholder를 `ARGOCD_INFRA_REPO_URL` 값으로 렌더링해서 적용합니다. repo URL을 override하는 경우에는 직접 `kubectl apply -f argocd/applications/*.yaml` 대신 Makefile target을 사용합니다.
 
-Argo CD server는 기본 `ClusterIP`입니다. 외부 공개하지 않습니다.
+Argo CD server는 기본 `ClusterIP`이고, 외부 진입은 `addons/argocd/ingress.yaml`의 별도 public ALB Ingress가 담당합니다. `argocd.dannis.cloud`는 Argo CD 로그인으로 보호하고, ALB inbound allowlist는 현재 공인 IP `182.227.198.110/32`만 허용합니다.
 
 ```sh
 kubectl -n argocd port-forward svc/argocd-server 8080:80
@@ -808,13 +810,14 @@ Ingress가 만든 ALB DNS 이름을 Route53 alias로 연결합니다.
 | woori-backend | Kubernetes Ingress/public ALB | `https://woori-api.dannis.cloud` |
 | wallet-backend | Kubernetes Ingress/public ALB | `https://wallet-api.dannis.cloud` |
 | Grafana | Kubernetes Ingress/public ALB | `https://grafana.dannis.cloud` |
+| Argo CD | Kubernetes Ingress/public ALB with IP allowlist | `https://argocd.dannis.cloud` |
 
 Ingress domain 운영 절차:
 
 ```text
 1. infra/dns 스택이 ap-northeast-2 ACM에 *.dannis.cloud 인증서를 만들고 DNS validation까지 처리합니다.
 2. make apply-all 후 kubectl get ingress -A 로 public ALB ADDRESS를 확인합니다.
-3. Route53에서 frontend.dannis.cloud, wallet-api.dannis.cloud, woori-api.dannis.cloud, grafana.dannis.cloud를 해당 ALB로 A alias 연결합니다.
+3. Route53에서 frontend.dannis.cloud, wallet-api.dannis.cloud, woori-api.dannis.cloud, grafana.dannis.cloud, argocd.dannis.cloud를 해당 ALB로 A alias 연결합니다.
 ```
 
 전제 조건:
