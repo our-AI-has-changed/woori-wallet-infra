@@ -12,6 +12,7 @@ metadata:
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
     alb.ingress.kubernetes.io/load-balancer-name: woori-wallet-prd-public
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-northeast-2:655700895912:certificate/807f8b40-c30e-4a90-9c88-55e3264ba5f5
     alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
     alb.ingress.kubernetes.io/ssl-redirect: "443"
     alb.ingress.kubernetes.io/healthcheck-path: /api/health

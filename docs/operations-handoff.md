@@ -812,9 +812,9 @@ Ingress가 만든 ALB DNS 이름을 Route53 alias로 연결합니다.
 Ingress domain 운영 절차:
 
 ```text
-1. ap-northeast-2 ACM에 frontend.dannis.cloud, wallet-api.dannis.cloud, woori-api.dannis.cloud, grafana.dannis.cloud 인증서를 준비합니다.
+1. infra/dns 스택이 ap-northeast-2 ACM에 *.dannis.cloud 인증서를 만들고 DNS validation까지 처리합니다.
 2. make apply-all 후 kubectl get ingress -A 로 public ALB ADDRESS를 확인합니다.
-3. Route53에서 네 host를 해당 ALB로 A alias 연결합니다.
+3. Route53에서 frontend.dannis.cloud, wallet-api.dannis.cloud, woori-api.dannis.cloud, grafana.dannis.cloud를 해당 ALB로 A alias 연결합니다.
 ```
 
 전제 조건:

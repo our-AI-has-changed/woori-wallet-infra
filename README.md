@@ -368,11 +368,11 @@ kubectl -n monitoring get ingress grafana
 | wallet-backend | `https://wallet-api.dannis.cloud` |
 | Grafana | `https://grafana.dannis.cloud` |
 
-`dns` Terraform 스택은 `dannis.cloud` public Route53 hosted zone을 생성합니다. 이 스택은 최초 1회 apply 후 계속 유지하는 장기 기반 리소스입니다.
+`dns` Terraform 스택은 `dannis.cloud` public Route53 hosted zone과 public ALB용 `*.dannis.cloud` ACM certificate를 생성합니다. 이 스택은 최초 1회 apply 후 계속 유지하는 장기 기반 리소스입니다.
 
-Ingress는 `frontend.dannis.cloud`, `wallet-api.dannis.cloud`, `woori-api.dannis.cloud`, `grafana.dannis.cloud` host로 public ALB를 생성합니다. AWS Load Balancer Controller는 Ingress TLS host와 일치하는 ACM certificate를 같은 region에서 자동 탐색할 수 있습니다. ExternalDNS는 설치하지 않으므로, apply 후 `kubectl get ingress -A`의 `ADDRESS` 값을 확인해 Route53에서 위 네 host를 해당 ALB로 alias 연결합니다.
+Ingress는 `frontend.dannis.cloud`, `wallet-api.dannis.cloud`, `woori-api.dannis.cloud`, `grafana.dannis.cloud` host로 public ALB를 생성합니다. AWS Load Balancer Controller는 `dns` 스택이 만든 같은 region의 wildcard ACM certificate를 자동 탐색합니다. ExternalDNS는 설치하지 않으므로, apply 후 `kubectl get ingress -A`의 `ADDRESS` 값을 확인해 Route53에서 위 네 host를 해당 ALB로 alias 연결합니다.
 
-외부 도메인 구매처에서 `dannis.cloud`를 샀다면, `make output SERVICE_MODE=dns`에 나오는 Route53 name server 4개를 구매처 DNS 설정에 위임해야 합니다. 외부 도메인 구매처에는 A record가 아니라 Route53 name server 4개를 등록합니다. 위임 전에는 ACM certificate 검증이 완료되지 않아 edge apply가 오래 기다리다 실패할 수 있습니다.
+외부 도메인 구매처에서 `dannis.cloud`를 샀다면, `make output SERVICE_MODE=dns`에 나오는 Route53 name server 4개를 구매처 DNS 설정에 위임해야 합니다. 외부 도메인 구매처에는 A record가 아니라 Route53 name server 4개를 등록합니다. 위임 전에는 ACM certificate 검증이 완료되지 않아 `dns` apply가 오래 기다리다 실패할 수 있습니다.
 
 Route53 hosted zone을 삭제했다가 다시 만들면 name server 4개가 바뀔 수 있습니다. 그러면 도메인 구매처에 NS를 다시 등록해야 하므로, 비용 절감용 종료 절차에서는 `dns` 스택을 내리지 않습니다.
 
