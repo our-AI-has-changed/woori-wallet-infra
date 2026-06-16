@@ -48,6 +48,137 @@ locals {
     ] : []
   )
 
+  aws_load_balancer_controller_iam_policy_statements = [
+    {
+      Sid    = "CreateServiceLinkedRole"
+      Effect = "Allow"
+      Action = [
+        "iam:CreateServiceLinkedRole"
+      ]
+      Resource = "*"
+      Condition = {
+        StringEquals = {
+          "iam:AWSServiceName" = "elasticloadbalancing.amazonaws.com"
+        }
+      }
+    },
+    {
+      Sid    = "ReadAwsResources"
+      Effect = "Allow"
+      Action = [
+        "acm:DescribeCertificate",
+        "acm:ListCertificates",
+        "cognito-idp:DescribeUserPoolClient",
+        "ec2:DescribeAccountAttributes",
+        "ec2:DescribeAddresses",
+        "ec2:DescribeAvailabilityZones",
+        "ec2:DescribeCoipPools",
+        "ec2:DescribeInstances",
+        "ec2:DescribeInternetGateways",
+        "ec2:DescribeIpamPools",
+        "ec2:DescribeIpv6Pools",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DescribeRouteTables",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeTags",
+        "ec2:DescribeVpcPeeringConnections",
+        "ec2:DescribeVpcs",
+        "ec2:GetCoipPoolUsage",
+        "ec2:GetSecurityGroupsForVpc",
+        "elasticloadbalancing:DescribeListenerAttributes",
+        "elasticloadbalancing:DescribeListeners",
+        "elasticloadbalancing:DescribeLoadBalancerAttributes",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeRules",
+        "elasticloadbalancing:DescribeSSLPolicies",
+        "elasticloadbalancing:DescribeTags",
+        "elasticloadbalancing:DescribeTargetGroupAttributes",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "elasticloadbalancing:DescribeTrustStores",
+        "iam:GetServerCertificate",
+        "iam:ListServerCertificates",
+        "shield:DescribeProtection",
+        "shield:GetSubscriptionState",
+        "waf-regional:GetWebACL",
+        "waf-regional:GetWebACLForResource",
+        "wafv2:GetWebACL",
+        "wafv2:GetWebACLForResource"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "ManageAlbSecurityGroups"
+      Effect = "Allow"
+      Action = [
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:CreateSecurityGroup",
+        "ec2:DeleteSecurityGroup",
+        "ec2:ModifySecurityGroupRules",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "ManageEc2Tags"
+      Effect = "Allow"
+      Action = [
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "ManageLoadBalancers"
+      Effect = "Allow"
+      Action = [
+        "elasticloadbalancing:AddListenerCertificates",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:CreateRule",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:DeleteRule",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyListenerAttributes",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:ModifyRule",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:RemoveListenerCertificates",
+        "elasticloadbalancing:RemoveTags",
+        "elasticloadbalancing:SetIpAddressType",
+        "elasticloadbalancing:SetRulePriorities",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets",
+        "elasticloadbalancing:SetWebAcl"
+      ]
+      Resource = "*"
+    },
+    {
+      Sid    = "ManageWebAclAndShieldAssociations"
+      Effect = "Allow"
+      Action = [
+        "shield:CreateProtection",
+        "shield:DeleteProtection",
+        "waf-regional:AssociateWebACL",
+        "waf-regional:DisassociateWebACL",
+        "wafv2:AssociateWebACL",
+        "wafv2:DisassociateWebACL"
+      ]
+      Resource = "*"
+    }
+  ]
+
   common_tags = merge(
     {
       Project     = var.project
@@ -343,6 +474,54 @@ resource "aws_iam_role_policy_attachment" "external_secrets_ssm" {
 
   role       = aws_iam_role.external_secrets[0].name
   policy_arn = aws_iam_policy.external_secrets_ssm[0].arn
+}
+
+resource "aws_iam_role" "aws_load_balancer_controller" {
+  count = 1
+
+  name = "${local.cluster_name}-aws-load-balancer-controller-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks[0].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${local.oidc_provider}:aud" = "sts.amazonaws.com"
+            "${local.oidc_provider}:sub" = "system:serviceaccount:kube-system:aws-load-balancer-controller"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_policy" "aws_load_balancer_controller" {
+  count = 1
+
+  name        = "${local.cluster_name}-aws-load-balancer-controller"
+  description = "Allow AWS Load Balancer Controller to manage frontend public ALB resources."
+
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = local.aws_load_balancer_controller_iam_policy_statements
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "aws_load_balancer_controller" {
+  count = 1
+
+  role       = aws_iam_role.aws_load_balancer_controller[0].name
+  policy_arn = aws_iam_policy.aws_load_balancer_controller[0].arn
 }
 
 resource "aws_eks_node_group" "this" {

@@ -7,11 +7,10 @@ metadata:
     app.kubernetes.io/name: wallet-backend
     app.kubernetes.io/part-of: woori-wallet
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: wallet-backend
   ports:
     - name: http
       port: 80
       targetPort: http
-      nodePort: 30080

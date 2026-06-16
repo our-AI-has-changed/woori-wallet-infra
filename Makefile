@@ -1,9 +1,10 @@
-SERVICE_MODE ?= edge-woori
+SERVICE_MODE ?= platform
 STACK_MODE ?= $(SERVICE_MODE)
 AWS_REGION ?= ap-northeast-2
 ECR_REGISTRY ?= 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com
 ARGOCD_CHART_VERSION ?= 7.8.27
 EXTERNAL_SECRETS_CHART_VERSION ?= 0.14.4
+AWS_LOAD_BALANCER_CONTROLLER_CHART_VERSION ?= 1.13.0
 GIT_BRANCH ?= main
 METRICS_TOKEN_PARAMETER ?= /woori-wallet/prod/metrics-token
 TRIAL_WOORI_BACKEND_ENV_PARAMETER ?= /woori-wallet/prod/trial/woori-backend-env
@@ -23,10 +24,10 @@ FORCE_GRAFANA_ADMIN_PASSWORD ?= no
 CREATE_MISSING_SSM_PARAMETERS ?= no
 ROUTE53_ZONE_NAME ?= dannis.cloud
 EDGE_CUSTOM_DOMAIN_ENABLED ?= yes
-CANONICAL_STACK := $(if $(filter wallet,$(STACK_MODE)),edge-wallet,$(if $(filter woori,$(STACK_MODE)),edge-woori,$(if $(filter frontend,$(STACK_MODE)),edge-frontend,$(STACK_MODE))))
+CANONICAL_STACK := $(STACK_MODE)
 TF_DIR := $(if $(filter state,$(CANONICAL_STACK)),bootstrap/state,infra/$(CANONICAL_STACK))
 
-.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify route53-zone-check route53-delegation-check ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure external-secrets-install argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-render apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all destroy-dns output
+.PHONY: init fmt validate plan apply apply-all gitops-guard update-kubeconfig images-verify route53-zone-check route53-delegation-check ssm-parameters-check ssm-parameters-bootstrap ssm-parameters-ensure external-secrets-install aws-load-balancer-controller-install argocd-install argocd-repo-token-check argocd-repo-secret argocd-apply db-secret monitoring-secret secrets-apply monitoring-apply monitoring-wait app-secrets-wait monitoring-secrets-wait secrets-wait addons-apply apps-wait deploy-apps apps-render apps-dry-run apps-apply argocd-apps-apply workloads-delete data-delete confirm-data-delete destroy stop-all destroy-all destroy-dns legacy-edges-destroy output
 
 init:
 	terraform -chdir=$(TF_DIR) init -reconfigure
@@ -41,7 +42,7 @@ plan:
 	terraform -chdir=$(TF_DIR) plan
 
 apply:
-	@if { [ "$(CANONICAL_STACK)" = "edge-frontend" ] || [ "$(CANONICAL_STACK)" = "edge-woori" ] || [ "$(CANONICAL_STACK)" = "edge-wallet" ] || [ "$(CANONICAL_STACK)" = "edge-monitoring" ]; } && [ "$(EDGE_CUSTOM_DOMAIN_ENABLED)" = "yes" ]; then \
+	@if { [ "$(CANONICAL_STACK)" = "edge-woori" ] || [ "$(CANONICAL_STACK)" = "edge-wallet" ] || [ "$(CANONICAL_STACK)" = "edge-monitoring" ]; } && [ "$(EDGE_CUSTOM_DOMAIN_ENABLED)" = "yes" ]; then \
 		$(MAKE) route53-zone-check; \
 		$(MAKE) route53-delegation-check; \
 	fi
@@ -206,6 +207,28 @@ external-secrets-install:
 	kubectl wait --for condition=Established crd/clustersecretstores.external-secrets.io --timeout=120s
 	kubectl apply -f addons/external-secrets/cluster-secret-store.yaml
 
+aws-load-balancer-controller-install:
+	helm repo add eks https://aws.github.io/eks-charts --force-update
+	helm repo update
+	@set -e; \
+	cluster_name="$$(terraform -chdir=infra/platform output -raw cluster_name)"; \
+	vpc_id="$$(terraform -chdir=infra/platform output -raw vpc_id)"; \
+	role_arn="$$(terraform -chdir=infra/platform output -raw aws_load_balancer_controller_irsa_role_arn)"; \
+	if [ -z "$$role_arn" ]; then \
+		echo "aws_load_balancer_controller_irsa_role_arn is empty. Ensure infra/platform has been applied."; \
+		exit 1; \
+	fi; \
+	helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-controller \
+		--namespace kube-system \
+		--version $(AWS_LOAD_BALANCER_CONTROLLER_CHART_VERSION) \
+		--values addons/aws-load-balancer-controller/values.yaml \
+		--set clusterName="$$cluster_name" \
+		--set region="$(AWS_REGION)" \
+		--set vpcId="$$vpc_id" \
+		--set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$$role_arn" \
+		--wait \
+		--timeout 300s
+
 argocd-install:
 	kubectl apply -f addons/argocd/namespace.yaml
 	helm repo add argo https://argoproj.github.io/argo-helm --force-update
@@ -354,6 +377,7 @@ monitoring-wait: monitoring-secret monitoring-secrets-wait
 	for resource in \
 		"namespace/monitoring" \
 		"service/kube-prometheus-stack-grafana -n monitoring" \
+		"ingress/grafana -n monitoring" \
 		"deployment/kube-prometheus-stack-grafana -n monitoring"; do \
 		echo "Waiting for $$resource"; \
 		until kubectl get $$resource >/dev/null 2>&1; do \
@@ -417,6 +441,9 @@ apps-wait: app-secrets-wait
 		"service/wallet-backend -n wallet" \
 		"service/woori-backend -n woori" \
 		"service/frontend -n frontend" \
+		"ingress/frontend -n frontend" \
+		"ingress/wallet-backend -n wallet" \
+		"ingress/woori-backend -n woori" \
 		"deployment/wallet-backend -n wallet" \
 		"deployment/woori-backend -n woori" \
 		"deployment/frontend -n frontend" \
@@ -492,6 +519,9 @@ workloads-delete:
 	kubectl -n wallet delete deployment wallet-backend wallet-ai mock-mydata --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete deployment woori-backend --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n frontend delete deployment frontend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n frontend delete ingress frontend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n wallet delete ingress wallet-backend --ignore-not-found=true --wait=true --timeout=300s; \
+	kubectl -n woori delete ingress woori-backend --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete statefulset wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n woori delete statefulset woori-db --ignore-not-found=true --wait=true --timeout=300s; \
 	kubectl -n wallet delete service wallet-backend wallet-ai mock-mydata wallet-db --ignore-not-found=true --wait=true --timeout=300s; \
@@ -543,19 +573,11 @@ destroy:
 	terraform -chdir=$(TF_DIR) destroy
 
 stop-all:
-	$(MAKE) destroy SERVICE_MODE=edge-monitoring
-	$(MAKE) destroy SERVICE_MODE=edge-frontend
-	$(MAKE) destroy SERVICE_MODE=edge-wallet
-	$(MAKE) destroy SERVICE_MODE=edge-woori
 	$(MAKE) workloads-delete
-	@echo "Stopped public edges and Kubernetes workloads. Platform resources and DB PVCs are retained."
+	@echo "Stopped Kubernetes workloads and Ingress ALBs. Platform resources and DB PVCs are retained."
 
 destroy-all:
 	$(MAKE) confirm-data-delete
-	$(MAKE) destroy SERVICE_MODE=edge-monitoring
-	$(MAKE) destroy SERVICE_MODE=edge-frontend
-	$(MAKE) destroy SERVICE_MODE=edge-wallet
-	$(MAKE) destroy SERVICE_MODE=edge-woori
 	$(MAKE) workloads-delete
 	$(MAKE) data-delete CONFIRM_DATA_DELETE=yes
 	$(MAKE) destroy SERVICE_MODE=platform
@@ -564,6 +586,11 @@ destroy-all:
 destroy-dns:
 	@test "$(CONFIRM_DNS_DELETE)" = "yes" || { echo "Route53 DNS hosted zone is a long-lived base resource. Re-run with CONFIRM_DNS_DELETE=yes only if NS changes are accepted."; exit 1; }
 	$(MAKE) destroy SERVICE_MODE=dns CONFIRM_DNS_DELETE=yes
+
+legacy-edges-destroy:
+	$(MAKE) destroy SERVICE_MODE=edge-monitoring
+	$(MAKE) destroy SERVICE_MODE=edge-wallet
+	$(MAKE) destroy SERVICE_MODE=edge-woori
 
 apply-all:
 	$(MAKE) gitops-guard
@@ -576,14 +603,11 @@ apply-all:
 	$(MAKE) apply SERVICE_MODE=platform
 	$(MAKE) update-kubeconfig
 	$(MAKE) external-secrets-install
+	$(MAKE) aws-load-balancer-controller-install
 	$(MAKE) argocd-install
 	$(MAKE) addons-apply
 	$(MAKE) monitoring-wait
 	$(MAKE) apps-wait
-	$(MAKE) apply SERVICE_MODE=edge-frontend
-	$(MAKE) apply SERVICE_MODE=edge-woori
-	$(MAKE) apply SERVICE_MODE=edge-wallet
-	$(MAKE) apply SERVICE_MODE=edge-monitoring
 
 output:
 	terraform -chdir=$(TF_DIR) output

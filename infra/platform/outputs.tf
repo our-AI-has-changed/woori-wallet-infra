@@ -63,3 +63,8 @@ output "external_secrets_irsa_role_arn" {
   description = "IAM role ARN used by the External Secrets Operator service account."
   value       = try(aws_iam_role.external_secrets[0].arn, "")
 }
+
+output "aws_load_balancer_controller_irsa_role_arn" {
+  description = "IAM role ARN used by the AWS Load Balancer Controller service account."
+  value       = try(aws_iam_role.aws_load_balancer_controller[0].arn, "")
+}
