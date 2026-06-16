@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: wallet-backend
-          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/wallet-backend:sha-d2095c1
+          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/wallet-backend:sha-0cf2236
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
