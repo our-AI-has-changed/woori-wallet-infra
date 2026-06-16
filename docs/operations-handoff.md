@@ -27,7 +27,7 @@ Terraform은 AWS 인프라와 public edge만 관리한다.
 Kubernetes 앱/DB/모니터링은 Argo CD + Helm + manifest로 관리한다.
 앱 배포 기준은 ECR image가 아니라 infra repo main 브랜치의 manifest다.
 비용 절감을 위해 RDS와 AWS Managed Prometheus/Grafana는 쓰지 않는다.
-Grafana 외부 공개는 선택 사항이며 기본 apply-all에서는 만들지 않는다.
+Grafana public edge는 apply-all/stop-all/destroy-all에 항상 포함한다.
 Route53 hosted zone은 장기 유지 리소스라 destroy-all에서 제외한다.
 ```
 
@@ -601,8 +601,7 @@ kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3001:80
 Grafana 외부 공개:
 
 ```text
-기본 apply-all에서는 edge-monitoring을 만들지 않습니다.
-외부 공개가 필요할 때만 ENABLE_GRAFANA_EDGE=yes를 사용합니다.
+apply-all에서는 edge-monitoring을 항상 만듭니다.
 Prometheus와 Alertmanager는 계속 비공개입니다.
 edge-monitoring은 API Gateway Lambda REQUEST authorizer allowlist를 사용합니다.
 ```
@@ -613,7 +612,7 @@ admin_allowed_cidrs = ["실제-관리자-또는-VPN-공인IP/32"]
 ```
 
 ```sh
-ENABLE_GRAFANA_EDGE=yes make apply-all
+make apply-all
 make output SERVICE_MODE=edge-monitoring
 ```
 
@@ -667,7 +666,7 @@ make apply-all
 16. terraform apply SERVICE_MODE=edge-frontend
 17. terraform apply SERVICE_MODE=edge-woori
 18. terraform apply SERVICE_MODE=edge-wallet
-19. ENABLE_GRAFANA_EDGE=yes일 때만 terraform apply SERVICE_MODE=edge-monitoring
+19. terraform apply SERVICE_MODE=edge-monitoring
 ```
 
 `gitops-guard`는 다음을 확인합니다.
@@ -845,12 +844,6 @@ make init SERVICE_MODE=edge-monitoring
 make apply-all
 ```
 
-Grafana 외부 edge까지 같이 올릴 때:
-
-```sh
-ENABLE_GRAFANA_EDGE=yes make apply-all
-```
-
 재기동 후 확인:
 
 ```sh
@@ -880,7 +873,7 @@ platform까지 destroy 후 다시 apply하면 API Gateway ID와 기본 endpoint 
 | frontend | `edge-frontend` | `https://frontend.dannis.cloud` |
 | woori-backend | `edge-woori` | `https://woori-api.dannis.cloud` |
 | wallet-backend | `edge-wallet` | `https://wallet-api.dannis.cloud` |
-| Grafana, 선택 적용 | `edge-monitoring` | `https://grafana.dannis.cloud` |
+| Grafana | `edge-monitoring` | `https://grafana.dannis.cloud` |
 
 ```hcl
 # infra/edge-wallet/variables.tf
@@ -978,7 +971,7 @@ RDS 대신 EKS 내부 MySQL pod 사용
 AWS Managed Prometheus/Grafana 대신 EKS 내부 kube-prometheus-stack 사용
 NAT Gateway는 1개만 사용
 app replica는 1개 유지
-Grafana public edge는 기본 apply-all에서 제외
+Grafana public edge는 apply-all/stop-all/destroy-all에 포함하되 관리자 IP allowlist로 제한
 Prometheus PVC disabled
 Grafana persistence disabled
 ```

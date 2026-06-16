@@ -313,13 +313,7 @@ kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-passwor
 kubectl -n monitoring port-forward svc/kube-prometheus-stack-grafana 3001:80
 ```
 
-Grafana만 외부 공개가 필요하면 `edge-monitoring`을 사용합니다. 기본 `apply-all`은 비용과 allowlist 실수를 줄이기 위해 Grafana edge를 만들지 않습니다.
-
-```sh
-ENABLE_GRAFANA_EDGE=yes make apply-all
-```
-
-이때 `infra/edge-monitoring/terraform.tfvars`의 `admin_allowed_cidrs`를 실제 관리자/VPN 공인 IP CIDR로 먼저 바꿔야 합니다.
+Grafana public edge는 `make apply-all`에 항상 포함됩니다. Prometheus와 Alertmanager는 계속 비공개이며, Grafana 접근은 `infra/edge-monitoring/terraform.tfvars`의 `admin_allowed_cidrs`에 등록된 관리자/VPN 공인 IP CIDR로 제한합니다.
 
 ## 빠른 시작
 
@@ -364,7 +358,7 @@ apps wait
 Terraform edge-frontend apply
 Terraform edge-woori apply
 Terraform edge-wallet apply
-optional Terraform edge-monitoring apply
+Terraform edge-monitoring apply
 ```
 
 서비스 endpoint 확인:
@@ -383,7 +377,7 @@ make output SERVICE_MODE=edge-monitoring
 | frontend | `https://frontend.dannis.cloud` |
 | woori-backend | `https://woori-api.dannis.cloud` |
 | wallet-backend | `https://wallet-api.dannis.cloud` |
-| Grafana, 선택 적용 | `https://grafana.dannis.cloud` |
+| Grafana | `https://grafana.dannis.cloud` |
 
 `dns` Terraform 스택은 `dannis.cloud` public Route53 hosted zone을 생성합니다. 이 스택은 최초 1회 apply 후 계속 유지하는 장기 기반 리소스입니다. 각 edge Terraform 스택은 `dns` remote state의 hosted zone ID를 사용해 ACM certificate, DNS validation record, API Gateway custom domain, API mapping, Route53 A alias record를 생성합니다.
 

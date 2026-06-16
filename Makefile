@@ -20,7 +20,6 @@ WOORI_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/woori-db-root-password
 WALLET_DB_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-password
 WALLET_DB_ROOT_PASSWORD_PARAMETER ?= /woori-wallet/prod/wallet-db-root-password
 FORCE_GRAFANA_ADMIN_PASSWORD ?= no
-ENABLE_GRAFANA_EDGE ?= no
 CREATE_MISSING_SSM_PARAMETERS ?= no
 ROUTE53_ZONE_NAME ?= dannis.cloud
 EDGE_CUSTOM_DOMAIN_ENABLED ?= yes
@@ -584,11 +583,7 @@ apply-all:
 	$(MAKE) apply SERVICE_MODE=edge-frontend
 	$(MAKE) apply SERVICE_MODE=edge-woori
 	$(MAKE) apply SERVICE_MODE=edge-wallet
-	@if [ "$(ENABLE_GRAFANA_EDGE)" = "yes" ]; then \
-		$(MAKE) apply SERVICE_MODE=edge-monitoring; \
-	else \
-		echo "Skipping edge-monitoring apply. Use ENABLE_GRAFANA_EDGE=yes make apply-all or make apply SERVICE_MODE=edge-monitoring when public Grafana is needed."; \
-	fi
+	$(MAKE) apply SERVICE_MODE=edge-monitoring
 
 output:
 	terraform -chdir=$(TF_DIR) output
