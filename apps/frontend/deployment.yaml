@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/frontend:sha-1129479
+          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/frontend:sha-d2095c1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
