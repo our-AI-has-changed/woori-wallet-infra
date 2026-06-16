@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: woori-backend
-          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/woori-backend:sha-d2095c1
+          image: 655700895912.dkr.ecr.ap-northeast-2.amazonaws.com/our-ai-has-changed/woori-backend:sha-0cf2236
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
